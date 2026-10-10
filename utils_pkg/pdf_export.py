@@ -3,6 +3,7 @@
 # ─────────────────────────────────────────────
 
 import os
+import re
 from datetime import datetime
 from tkinter import filedialog
 
@@ -17,7 +18,7 @@ from reportlab.lib.enums import TA_LEFT
 
 
 # ─────────────────────────────────────────────
-# FONTS (Helvetica — no ₱, use PHP)
+# FONTS (Helvetica — use PHP instead of ₱)
 # ─────────────────────────────────────────────
 
 FONT_REGULAR = "Helvetica"
@@ -40,6 +41,34 @@ PROFIT_NEG  = colors.HexColor("#DC2626")
 
 
 # ─────────────────────────────────────────────
+# AUTO-INCREMENT FILENAME HELPER
+# ─────────────────────────────────────────────
+
+def _next_free_path(path):
+    """
+    If `path` already exists, return 'path_2.pdf', 'path_3.pdf', etc.
+    Otherwise return `path` unchanged.
+    """
+    if not os.path.exists(path):
+        return path
+
+    folder = os.path.dirname(path)
+    base, ext = os.path.splitext(os.path.basename(path))
+
+    # Strip a trailing _N if the user typed one, so numbering is clean
+    match = re.match(r"^(.*?)_(\d+)$", base)
+    if match:
+        base = match.group(1)
+
+    n = 1
+    while True:
+        candidate = os.path.join(folder, f"{base}_{n}{ext}")
+        if not os.path.exists(candidate):
+            return candidate
+        n += 1
+
+
+# ─────────────────────────────────────────────
 # MAIN ENTRY
 # ─────────────────────────────────────────────
 
@@ -55,30 +84,31 @@ def export_sales_report(summary, top_products, transactions,
         initialfile=default_name,
         filetypes=[("PDF files", "*.pdf"), ("All files", "*.*")],
         parent=parent_window,
+        confirmoverwrite=False,
     )
     if not path:
         return False, "Cancelled."
 
+    # ---- If that exact file exists, auto-pick the next free number ----
+    path = _next_free_path(path)
+
     try:
         _build_pdf(path, summary, top_products, transactions,
-                   date_from, date_to, payment_filter,
-                   exporter_name)
+                   date_from, date_to, payment_filter, exporter_name)
         return True, path
     except Exception as e:
         return False, str(e)
 
 
-# ─────────────────────────────────────────────
-# FILENAME
-# ─────────────────────────────────────────────
-
 def _default_filename(date_from, date_to):
     today = datetime.now().strftime("%Y%m%d")
     if date_from and date_to and date_from == date_to:
-        return f"3F_Sales_{date_from}_{today}.pdf"
-    if date_from and date_to:
-        return f"3F_Sales_{date_from}_to_{date_to}.pdf"
-    return f"3F_Sales_AllTime_{today}.pdf"
+        prefix = f"3F_Sales_{date_from}"
+    elif date_from and date_to:
+        prefix = f"3F_Sales_{date_from}_to_{date_to}"
+    else:
+        prefix = f"3F_Sales_AllTime_{today}"
+    return f"{prefix}_1.pdf"
 
 
 # ─────────────────────────────────────────────
@@ -86,8 +116,7 @@ def _default_filename(date_from, date_to):
 # ─────────────────────────────────────────────
 
 def _build_pdf(path, summary, top_products, transactions,
-               date_from, date_to, payment_filter,
-               exporter_name=""):
+               date_from, date_to, payment_filter, exporter_name=""):
     doc = SimpleDocTemplate(
         path,
         pagesize=letter,
@@ -102,10 +131,7 @@ def _build_pdf(path, summary, top_products, transactions,
     styles = _make_styles()
     story = []
 
-    # ═════════════════════════════════════════
-    # HEADER
-    # ═════════════════════════════════════════
-
+    # ---- Header ----
     story.append(Paragraph("3F MiniMart", styles["3f_brand"]))
     story.append(Spacer(1, 6))
     story.append(Paragraph("Sales Report", styles["3f_title"]))
@@ -120,10 +146,7 @@ def _build_pdf(path, summary, top_products, transactions,
     story.append(Paragraph("  •  ".join(subtitle_parts), styles["3f_subtitle"]))
     story.append(Spacer(1, 20))
 
-    # ═════════════════════════════════════════
-    # SUMMARY
-    # ═════════════════════════════════════════
-
+    # ---- Summary ----
     story.append(Paragraph("Summary", styles["3f_section"]))
     story.append(Spacer(1, 8))
 
@@ -160,10 +183,7 @@ def _build_pdf(path, summary, top_products, transactions,
     story.append(summary_table)
     story.append(Spacer(1, 22))
 
-    # ═════════════════════════════════════════
-    # TOP SELLING PRODUCTS
-    # ═════════════════════════════════════════
-
+    # ---- Top Selling Products ----
     story.append(Paragraph("Top Selling Products", styles["3f_section"]))
     story.append(Spacer(1, 8))
 
@@ -241,10 +261,7 @@ def _build_pdf(path, summary, top_products, transactions,
         table.setStyle(TableStyle(style_cmds))
         story.append(table)
 
-    # ═════════════════════════════════════════
-    # TRANSACTIONS
-    # ═════════════════════════════════════════
-
+    # ---- Transactions ----
     story.append(Spacer(1, 26))
     story.append(Paragraph(
         f"Transactions ({len(transactions)})",
@@ -258,7 +275,6 @@ def _build_pdf(path, summary, top_products, transactions,
             styles["3f_empty"],
         ))
     else:
-        # Lazy import to avoid circular dependency at module load
         from controllers.transaction_controller import TransactionController
 
         header = ["Txn #", "Date & Time", "Cashier",
@@ -270,7 +286,6 @@ def _build_pdf(path, summary, top_products, transactions,
             tid = t.get("transaction_id")
             cashier = t.get("full_name") or t.get("username") or "-"
 
-            # ---- Build items list ----
             try:
                 line_items = TransactionController.items(tid)
             except Exception:
@@ -332,10 +347,7 @@ def _build_pdf(path, summary, top_products, transactions,
         txn_table.setStyle(TableStyle(txn_style))
         story.append(txn_table)
 
-    # ═════════════════════════════════════════
-    # FOOTER
-    # ═════════════════════════════════════════
-
+    # ---- Footer ----
     story.append(Spacer(1, 28))
     story.append(Paragraph(
         f"Exported by: {exporter_name or '-'}",

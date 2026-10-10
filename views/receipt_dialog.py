@@ -127,7 +127,7 @@ class ReceiptDialog(ctk.CTkToplevel):
                       command=self.destroy
                       ).pack(side="left")
 
-        ctk.CTkButton(btn_row, text="Open in Notepad",
+        ctk.CTkButton(btn_row, text="Print",
                       height=40,
                       corner_radius=8,
                       font=font_bold(12),

@@ -4,6 +4,7 @@
 
 import sqlite3
 import datetime
+import threading
 from config import DB_PATH, ROLE_ADMIN
 
 
@@ -16,18 +17,98 @@ def now_local():
 
 
 # ─────────────────────────────────────────────
-# CONNECTION
+# SHARED CONNECTION — one per thread, wrapped so
+# that .close() is a no-op. Existing model files
+# call conn.close() everywhere; that stays safe.
 # ─────────────────────────────────────────────
 
+_local = threading.local()
+
+
+class _SharedConnection:
+    """Wraps a real sqlite3.Connection so .close() does nothing.
+
+    The app opens a fresh connection in every model function and closes
+    it immediately after. Opening a SQLite file is expensive on Windows
+    (file lock, WAL header check, PRAGMA setup), and doing it hundreds of
+    times per screen was the source of multi-second lag.
+
+    This wrapper keeps ONE real connection alive per thread and turns
+    every .close() into a no-op, so existing code that does:
+
+        conn = get_connection()
+        ...
+        conn.close()
+
+    keeps working unchanged, but never actually closes the handle.
+    """
+
+    __slots__ = ("_conn",)
+
+    def __init__(self, real_conn):
+        self._conn = real_conn
+
+    # ---- Everything proxies to the real connection ----
+
+    def execute(self, *args, **kwargs):
+        return self._conn.execute(*args, **kwargs)
+
+    def executemany(self, *args, **kwargs):
+        return self._conn.executemany(*args, **kwargs)
+
+    def executescript(self, *args, **kwargs):
+        return self._conn.executescript(*args, **kwargs)
+
+    def cursor(self, *args, **kwargs):
+        return self._conn.cursor(*args, **kwargs)
+
+    def commit(self, *args, **kwargs):
+        return self._conn.commit(*args, **kwargs)
+
+    def rollback(self, *args, **kwargs):
+        return self._conn.rollback(*args, **kwargs)
+
+    def close(self, *args, **kwargs):
+        # ⚡ NO-OP — shared connection stays open
+        return None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        # Do NOT close on context exit either
+        return False
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+
 def get_connection():
-    conn = sqlite3.connect(DB_PATH, timeout=10)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA journal_mode = WAL")
-    conn.execute("PRAGMA busy_timeout = 10000")
-    conn.execute("PRAGMA synchronous = NORMAL")
-    conn.execute("PRAGMA temp_store = MEMORY")
+    """Return the shared, thread-local SQLite connection."""
+    conn = getattr(_local, "conn", None)
+    if conn is None:
+        real = sqlite3.connect(DB_PATH, timeout=10,
+                               check_same_thread=False)
+        real.row_factory = sqlite3.Row
+        real.execute("PRAGMA foreign_keys = ON")
+        real.execute("PRAGMA journal_mode = WAL")
+        real.execute("PRAGMA busy_timeout = 10000")
+        real.execute("PRAGMA synchronous = NORMAL")
+        real.execute("PRAGMA temp_store = MEMORY")
+        conn = _SharedConnection(real)
+        _local.conn = conn
     return conn
+
+
+def close_connection():
+    """Actually close the shared connection. Call at app shutdown."""
+    conn = getattr(_local, "conn", None)
+    if conn is not None:
+        try:
+            conn._conn.close()
+        except Exception:
+            pass
+        _local.conn = None
 
 
 # ─────────────────────────────────────────────
@@ -183,15 +264,17 @@ def initialize_database():
         )
     """)
 
-    # ---- 10. purchase_items ----
     cur.execute("""
         CREATE TABLE IF NOT EXISTS purchase_items (
-            pitem_id        INTEGER PRIMARY KEY AUTOINCREMENT,
-            purchase_id     INTEGER NOT NULL,
-            product_id      INTEGER NOT NULL,
-            quantity        INTEGER NOT NULL,
-            cost            REAL NOT NULL,
-            expiration_date TEXT,
+            pitem_id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            purchase_id        INTEGER NOT NULL,
+            product_id         INTEGER NOT NULL,
+            quantity           INTEGER NOT NULL,
+            unit               TEXT,
+            pieces_per_unit    INTEGER DEFAULT 1,
+            cost               REAL NOT NULL,
+            expiration_date    TEXT,
+            received_quantity  INTEGER,
             FOREIGN KEY (purchase_id) REFERENCES purchases(purchase_id),
             FOREIGN KEY (product_id)  REFERENCES products(product_id)
         )
@@ -209,11 +292,10 @@ def initialize_database():
         )
     """)
 
-    # ---- 12. Indexes (performance) ----
+    # ---- 12. Indexes ----
     _create_indexes(cur)
 
     conn.commit()
-    conn.close()
 
     _run_migrations()
     _seed_default_admin()
@@ -225,37 +307,29 @@ def initialize_database():
 # ─────────────────────────────────────────────
 
 def _create_indexes(cur):
-    """Create indexes that speed up dashboard + reports + POS queries."""
     index_sql = [
-        # ---- batches ----
         "CREATE INDEX IF NOT EXISTS idx_batches_product ON batches(product_id)",
         "CREATE INDEX IF NOT EXISTS idx_batches_expiration ON batches(expiration_date)",
         "CREATE INDEX IF NOT EXISTS idx_batches_archived ON batches(is_archived)",
         "CREATE INDEX IF NOT EXISTS idx_batches_product_active ON batches(product_id, is_archived, expiration_date)",
 
-        # ---- products ----
         "CREATE INDEX IF NOT EXISTS idx_products_supplier ON products(supplier_id)",
         "CREATE INDEX IF NOT EXISTS idx_products_category ON products(category_id)",
         "CREATE INDEX IF NOT EXISTS idx_products_archived ON products(is_archived)",
 
-        # ---- transactions ----
         "CREATE INDEX IF NOT EXISTS idx_transactions_created ON transactions(created_at)",
         "CREATE INDEX IF NOT EXISTS idx_transactions_user ON transactions(user_id)",
 
-        # ---- transaction_items ----
         "CREATE INDEX IF NOT EXISTS idx_txn_items_transaction ON transaction_items(transaction_id)",
         "CREATE INDEX IF NOT EXISTS idx_txn_items_product ON transaction_items(product_id)",
 
-        # ---- suppliers / categories ----
         "CREATE INDEX IF NOT EXISTS idx_suppliers_category ON suppliers(supplier_category_id)",
         "CREATE INDEX IF NOT EXISTS idx_suppliers_archived ON suppliers(is_archived)",
 
-        # ---- purchases ----
         "CREATE INDEX IF NOT EXISTS idx_purchases_supplier ON purchases(supplier_id)",
         "CREATE INDEX IF NOT EXISTS idx_purchases_status ON purchases(status)",
         "CREATE INDEX IF NOT EXISTS idx_purchase_items_purchase ON purchase_items(purchase_id)",
 
-        # ---- activity_logs ----
         "CREATE INDEX IF NOT EXISTS idx_logs_created ON activity_logs(created_at)",
     ]
     for sql in index_sql:
@@ -273,8 +347,11 @@ def _run_migrations():
     conn = get_connection()
     cur = conn.cursor()
 
-    # ---- suppliers: contact → contact_number + contact person ----
     migrations = [
+        ("ALTER TABLE suppliers ADD COLUMN supplier_category_id INTEGER",
+         "suppliers.supplier_category_id"),
+        ("ALTER TABLE suppliers ADD COLUMN is_archived INTEGER DEFAULT 0",
+         "suppliers.is_archived"),
         ("ALTER TABLE suppliers ADD COLUMN contact_number TEXT",
          "suppliers.contact_number"),
         ("ALTER TABLE suppliers ADD COLUMN contact_person_first TEXT",
@@ -283,7 +360,46 @@ def _run_migrations():
          "suppliers.contact_person_middle"),
         ("ALTER TABLE suppliers ADD COLUMN contact_person_last TEXT",
          "suppliers.contact_person_last"),
+
+        ("ALTER TABLE products ADD COLUMN product_code TEXT",
+         "products.product_code"),
+        ("ALTER TABLE products ADD COLUMN image_path TEXT",
+         "products.image_path"),
+        ("ALTER TABLE products ADD COLUMN is_archived INTEGER DEFAULT 0",
+         "products.is_archived"),
+        ("ALTER TABLE products ADD COLUMN brand TEXT",
+         "products.brand"),
+        ("ALTER TABLE products ADD COLUMN size TEXT",
+         "products.size"),
+        ("ALTER TABLE products ADD COLUMN unit TEXT DEFAULT 'pc'",
+         "products.unit"),
+        ("ALTER TABLE products ADD COLUMN cost_price REAL DEFAULT 0",
+         "products.cost_price"),
+        ("ALTER TABLE products ADD COLUMN expiration_date TEXT",
+         "products.expiration_date"),
+        ("ALTER TABLE products ADD COLUMN updated_at TEXT",
+         "products.updated_at"),
+
+        ("ALTER TABLE purchases ADD COLUMN status TEXT DEFAULT 'Ordered'",
+         "purchases.status"),
+        ("ALTER TABLE purchases ADD COLUMN notes TEXT",
+         "purchases.notes"),
+        ("ALTER TABLE purchases ADD COLUMN received_at TEXT",
+         "purchases.received_at"),
+
+        ("ALTER TABLE purchase_items ADD COLUMN unit TEXT",
+         "purchase_items.unit"),
+        ("ALTER TABLE purchase_items ADD COLUMN received_quantity INTEGER",
+         "purchase_items.received_quantity"),
+
+        ("ALTER TABLE transactions ADD COLUMN gcash_reference TEXT",
+         "transactions.gcash_reference"),
+
+        ("ALTER TABLE users ADD COLUMN first_name TEXT",  "users.first_name"),
+        ("ALTER TABLE users ADD COLUMN middle_name TEXT", "users.middle_name"),
+        ("ALTER TABLE users ADD COLUMN last_name TEXT",   "users.last_name"),
     ]
+
     for sql, name in migrations:
         try:
             cur.execute(sql)
@@ -291,7 +407,6 @@ def _run_migrations():
         except sqlite3.OperationalError:
             pass
 
-    # ---- Copy old `contact` → `contact_number` (one-time) ----
     try:
         cols = [r[1] for r in cur.execute("PRAGMA table_info(suppliers)")]
         if "contact" in cols:
@@ -306,11 +421,8 @@ def _run_migrations():
     except Exception:
         pass
 
-    # ---- Ensure indexes exist on pre-existing DBs ----
     _create_indexes(cur)
     conn.commit()
-
-    conn.close()
 
 
 # ─────────────────────────────────────────────
@@ -333,7 +445,7 @@ def _seed_default_admin():
             conn.commit()
             print("[DB] Default admin created -> username: admin | password: admin123")
     finally:
-        conn.close()
+        pass  # ⚡ do NOT close — shared connection
 
 
 def _seed_default_supplier_category():
@@ -349,4 +461,4 @@ def _seed_default_supplier_category():
             conn.commit()
             print("[DB] Default supplier category created: General")
     finally:
-        conn.close()
+        pass  # ⚡ do NOT close — shared connection

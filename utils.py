@@ -8,6 +8,7 @@ import shutil
 import uuid
 import customtkinter as ctk
 from tkinter import filedialog
+from datetime import datetime as _dt
 
 
 # ─────────────────────────────────────────────
@@ -165,3 +166,43 @@ def make_dialog(parent, title="Dialog", size="400x400", resizable=(False, False)
     dialog.geometry(size)
     dialog.resizable(*resizable)
     return dialog
+
+
+def ui_date_to_db(text):
+    """
+    Convert a UI date string 'MM/DD/YYYY' → 'YYYY-MM-DD'.
+    Returns None for empty or invalid input.
+    """
+    text = (text or "").strip()
+    if not text:
+        return None
+    try:
+        return _dt.strptime(text, "%m/%d/%Y").strftime("%Y-%m-%d")
+    except ValueError:
+        return None
+
+
+def db_date_to_ui(text):
+    """
+    Convert a DB date string 'YYYY-MM-DD' → 'MM/DD/YYYY'.
+    Returns "" for empty or invalid input.
+    """
+    text = (text or "").strip()
+    if not text:
+        return ""
+    try:
+        return _dt.strptime(text, "%Y-%m-%d").strftime("%m/%d/%Y")
+    except ValueError:
+        return ""
+
+
+def is_valid_ui_date(text):
+    """True if text is a valid 'MM/DD/YYYY' date."""
+    text = (text or "").strip()
+    if not text:
+        return False
+    try:
+        _dt.strptime(text, "%m/%d/%Y")
+        return True
+    except ValueError:
+        return False

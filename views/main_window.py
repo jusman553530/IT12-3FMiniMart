@@ -4,6 +4,7 @@
 
 import customtkinter as ctk
 from tkinter import messagebox
+from database import close_connection
 
 from config import (
     APP_NAME, font, font_bold,
@@ -267,3 +268,7 @@ class MainWindow(ctk.CTk):
 
         from views.login_view import LoginView
         LoginView().mainloop()
+
+    def destroy(self):
+        close_connection()
+        super().destroy()

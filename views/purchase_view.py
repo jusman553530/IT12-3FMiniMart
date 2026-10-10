@@ -1,7 +1,8 @@
 # ─────────────────────────────────────────────
-# PURCHASE RECORDS VIEW (softened 3F MiniMart branding)
+# PURCHASE RECORDS VIEW
 # ─────────────────────────────────────────────
-
+from views.receive_dialog import ReceiveConfirmDialog
+from views.purchase_order_dialog import PurchaseOrderDialog
 import customtkinter as ctk
 from tkinter import messagebox
 from datetime import datetime, timedelta
@@ -9,7 +10,9 @@ from datetime import datetime, timedelta
 from controllers.purchase_controller import PurchaseController
 from controllers.supplier_controller import SupplierController
 from controllers.inventory_controller import InventoryController
-from utils import prepare_dialog_screen
+from views.date_picker import DatePickerField
+from utils import prepare_dialog_screen, ui_date_to_db, is_valid_ui_date
+from utils_pkg.purchase_pdf_export import export_purchase_pdf
 from config import (
     font, font_bold,
     BG_MAIN, BG_CARD, BG_INPUT, BG_ROW_ALT, BORDER,
@@ -20,16 +23,9 @@ from config import (
 )
 
 
-# ─────────────────────────────────────────────
-# PURCHASE RECORDS VIEW
-# ─────────────────────────────────────────────
-
 class PurchaseView(ctk.CTkFrame):
 
     PAGE_SIZE = 10
-
-    ACTIVE_COLOR = ACCENT
-    IDLE_COLOR   = NEUTRAL
 
     def __init__(self, parent, user):
         super().__init__(parent, fg_color=BG_MAIN)
@@ -81,6 +77,7 @@ class PurchaseView(ctk.CTkFrame):
                                    border_color=BORDER)
         filter_card.pack(fill="x", padx=20, pady=(0, 10))
 
+        # ---- Row 1 ----
         row1 = ctk.CTkFrame(filter_card, fg_color="transparent")
         row1.pack(fill="x", padx=16, pady=(14, 6))
 
@@ -136,6 +133,7 @@ class PurchaseView(ctk.CTkFrame):
                       fg_color=ACCENT, hover_color=ACCENT_HOVER,
                       command=self._load).pack(side="right")
 
+        # ---- Row 2: date range (DatePickerField) ----
         row2 = ctk.CTkFrame(filter_card, fg_color="transparent")
         row2.pack(fill="x", padx=16, pady=(0, 14))
 
@@ -146,15 +144,10 @@ class PurchaseView(ctk.CTkFrame):
         self.date_from_var = ctk.StringVar()
         self.date_from_var.trace_add("write", self._on_date_change)
 
-        self.date_from_e = ctk.CTkEntry(
-            row2, placeholder_text="YYYY-MM-DD",
+        self.date_from_e = DatePickerField(
+            row2,
             textvariable=self.date_from_var,
-            width=130, height=36,
-            corner_radius=8,
-            font=font(12),
-            fg_color=BG_INPUT,
-            border_color=BORDER,
-            border_width=1,
+            width=180, height=36,
         )
         self.date_from_e.pack(side="left", padx=(0, 16))
 
@@ -165,15 +158,10 @@ class PurchaseView(ctk.CTkFrame):
         self.date_to_var = ctk.StringVar()
         self.date_to_var.trace_add("write", self._on_date_change)
 
-        self.date_to_e = ctk.CTkEntry(
-            row2, placeholder_text="YYYY-MM-DD",
+        self.date_to_e = DatePickerField(
+            row2,
             textvariable=self.date_to_var,
-            width=130, height=36,
-            corner_radius=8,
-            font=font(12),
-            fg_color=BG_INPUT,
-            border_color=BORDER,
-            border_width=1,
+            width=180, height=36,
         )
         self.date_to_e.pack(side="left", padx=(0, 16))
 
@@ -222,6 +210,7 @@ class PurchaseView(ctk.CTkFrame):
                                         text_color=FG_SECONDARY)
         self.count_label.pack(side="right", padx=(0, 4))
 
+        # ---- List card ----
         list_card = ctk.CTkFrame(self, fg_color=BG_CARD,
                                  corner_radius=12,
                                  border_width=1,
@@ -348,9 +337,9 @@ class PurchaseView(ctk.CTkFrame):
             return
         if d_to and len(d_to) < 10:
             return
-        if d_from and not self._is_valid_date(d_from):
+        if d_from and not is_valid_ui_date(d_from):
             return
-        if d_to and not self._is_valid_date(d_to):
+        if d_to and not is_valid_ui_date(d_to):
             return
         if d_from and d_to and d_from > d_to:
             return
@@ -361,27 +350,20 @@ class PurchaseView(ctk.CTkFrame):
         self.current_page = 1
         self._load()
 
-    def _is_valid_date(self, text):
-        try:
-            datetime.strptime(text, "%Y-%m-%d")
-            return True
-        except ValueError:
-            return False
-
     def _range_today(self):
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = datetime.now().strftime("%m/%d/%Y")
         self._set_dates_programmatically(today, today, self.btn_today)
 
     def _range_7_days(self):
         today = datetime.now()
-        start = (today - timedelta(days=6)).strftime("%Y-%m-%d")
-        end = today.strftime("%Y-%m-%d")
+        start = (today - timedelta(days=6)).strftime("%m/%d/%Y")
+        end = today.strftime("%m/%d/%Y")
         self._set_dates_programmatically(start, end, self.btn_7days)
 
     def _range_this_month(self):
         today = datetime.now()
-        start = today.replace(day=1).strftime("%Y-%m-%d")
-        end = today.strftime("%Y-%m-%d")
+        start = today.replace(day=1).strftime("%m/%d/%Y")
+        end = today.strftime("%m/%d/%Y")
         self._set_dates_programmatically(start, end, self.btn_month)
 
     def _clear_dates(self):
@@ -420,12 +402,15 @@ class PurchaseView(ctk.CTkFrame):
         if not self.date_from and not self.date_to:
             return purchases
 
+        db_from = ui_date_to_db(self.date_from)
+        db_to = ui_date_to_db(self.date_to)
+
         result = []
         for p in purchases:
             created = (p["created_at"] or "")[:10]
-            if self.date_from and created < self.date_from:
+            if db_from and created < db_from:
                 continue
-            if self.date_to and created > self.date_to:
+            if db_to and created > db_to:
                 continue
             result.append(p)
         return result
@@ -508,7 +493,13 @@ class PurchaseView(ctk.CTkFrame):
                      font=font(11),
                      text_color=FG_PRIMARY).pack(side="left", padx=3)
 
-        ctk.CTkLabel(row, text=f"₱{p['total_cost']:.2f}",
+        # ---- Total (reads purchases.total_cost) ----
+        try:
+            total_val = float(p["total_cost"] or 0)
+        except (TypeError, ValueError):
+            total_val = 0.0
+
+        ctk.CTkLabel(row, text=f"₱{total_val:.2f}",
                      width=90, anchor="w",
                      font=font_bold(11),
                      text_color=FG_PRIMARY).pack(side="left", padx=3)
@@ -569,15 +560,29 @@ class PurchaseView(ctk.CTkFrame):
     # ─────────────────────────────────────────────
 
     def _receive(self, purchase):
-        confirm = messagebox.askyesno(
-            "Receive Purchase Order",
-            f"Mark PO #{purchase['purchase_id']} as Received?\n\n"
-            "The ordered quantities will be added to inventory."
+        items = PurchaseController.get_items(purchase["purchase_id"])
+        dialog = ReceiveConfirmDialog(
+            self.winfo_toplevel(),
+            purchase,
+            items,
         )
-        if not confirm:
+        # ⚡ Caller blocks here. The dialog does NOT block on construction.
+        dialog.wait_window()
+
+        if not dialog.confirmed:
             return
 
-        ok, msg = PurchaseController.receive(self.user, purchase["purchase_id"])
+        received = dialog.received_quantities
+        if not received:
+            return
+
+        ok, msg = PurchaseController.receive(
+            self.user,
+            purchase["purchase_id"],
+            received_quantities=received,
+            line_costs=dialog.line_costs,
+            total_amount=dialog.total_amount,
+        )
         if ok:
             messagebox.showinfo("Received", msg)
             self._load()
@@ -610,524 +615,6 @@ class PurchaseView(ctk.CTkFrame):
 
 
 # ─────────────────────────────────────────────
-# NEW PURCHASE ORDER DIALOG
-# ─────────────────────────────────────────────
-
-class PurchaseOrderDialog(ctk.CTkToplevel):
-
-    def __init__(self, parent, user, on_save):
-        super().__init__(parent)
-        self.parent = parent
-        self.user = user
-        self.on_save = on_save
-        self.title("New Purchase Order")
-
-        # ═════════════════════════════════════════
-        # Smaller dialog so buttons stay on-screen
-        # ═════════════════════════════════════════
-        self.geometry("920x540")
-        self.minsize(820, 500)
-        self.resizable(True, True)
-        self.configure(fg_color=BG_MAIN)
-
-        self.suppliers = SupplierController.list_suppliers()
-        self.cart = []
-        self._supplier_products = []
-
-        self._build()
-        prepare_dialog_screen(self, self.parent)
-
-    def _build(self):
-        # ═════════════════════════════════════════
-        # HEADER
-        # ═════════════════════════════════════════
-
-        ctk.CTkLabel(self, text="New Purchase Order",
-                     font=font_bold(18),
-                     text_color=FG_PRIMARY).pack(pady=(14, 2))
-
-        ctk.CTkLabel(self, text="Select a supplier, then add products to order",
-                     font=font(11),
-                     text_color=FG_SECONDARY).pack(pady=(0, 8))
-
-        # ═════════════════════════════════════════
-        # SUPPLIER ROW
-        # ═════════════════════════════════════════
-
-        sup_card = ctk.CTkFrame(self, fg_color=BG_CARD,
-                                corner_radius=10,
-                                border_width=1,
-                                border_color=BORDER)
-        sup_card.pack(fill="x", padx=20, pady=(0, 8))
-
-        sup_row = ctk.CTkFrame(sup_card, fg_color="transparent")
-        sup_row.pack(fill="x", padx=14, pady=10)
-
-        ctk.CTkLabel(sup_row, text="SUPPLIER",
-                     font=font_bold(10),
-                     text_color=FG_SECONDARY).pack(side="left", padx=(0, 10))
-
-        self.supplier_names = [s["name"] for s in self.suppliers] or ["(No suppliers)"]
-        self.supplier_var = ctk.StringVar(value=self.supplier_names[0])
-        self.supplier_menu = ctk.CTkOptionMenu(
-            sup_row, values=self.supplier_names,
-            variable=self.supplier_var,
-            width=280, height=34,
-            corner_radius=8,
-            font=font(12),
-            fg_color=BG_INPUT,
-            button_color=BG_INPUT,
-            button_hover_color=NEUTRAL,
-            text_color=FG_PRIMARY,
-            command=self._on_supplier_change,
-        )
-        self.supplier_menu.pack(side="left", padx=(0, 10))
-
-        ctk.CTkButton(sup_row, text="Refresh", width=100, height=34,
-                      corner_radius=8,
-                      font=font_bold(12),
-                      fg_color=NEUTRAL, hover_color=NEUTRAL_HOVER,
-                      text_color=NEUTRAL_TEXT,
-                      command=self._load_products_for_supplier
-                      ).pack(side="left")
-
-        # ═════════════════════════════════════════
-        # BODY — two columns
-        # ═════════════════════════════════════════
-
-        body = ctk.CTkFrame(self, fg_color="transparent")
-        body.pack(fill="both", expand=True, padx=20, pady=(0, 6))
-
-        # ---- LEFT: products of supplier ----
-        left = ctk.CTkFrame(body, fg_color=BG_CARD,
-                            corner_radius=10,
-                            border_width=1,
-                            border_color=BORDER)
-        left.pack(side="left", fill="both", expand=True, padx=(0, 6))
-
-        ctk.CTkLabel(left, text="Products of Supplier",
-                     font=font_bold(12),
-                     text_color=FG_PRIMARY).pack(pady=(10, 2))
-
-        ctk.CTkLabel(left,
-                     text="Click a product to add it to the order",
-                     font=font(10),
-                     text_color=FG_MUTED).pack(pady=(0, 4))
-
-        prod_header = ctk.CTkFrame(left, fg_color="transparent")
-        prod_header.pack(fill="x", padx=8, pady=(0, 4))
-        for text, width in [("Name", 140), ("Size", 60), ("Unit", 45),
-                            ("Category", 90), ("Stock", 55)]:
-            ctk.CTkLabel(prod_header, text=text, width=width,
-                         anchor="w", font=font_bold(10),
-                         text_color=FG_SECONDARY).pack(side="left", padx=2)
-
-        self.products_frame = ctk.CTkScrollableFrame(left, fg_color="transparent")
-        self.products_frame.pack(fill="both", expand=True, padx=8, pady=(0, 10))
-
-        # ---- RIGHT: order lines ----
-        right = ctk.CTkFrame(body, fg_color=BG_CARD,
-                             corner_radius=10,
-                             border_width=1,
-                             border_color=BORDER)
-        right.pack(side="right", fill="both", expand=True, padx=(6, 0))
-
-        ctk.CTkLabel(right, text="Order Lines",
-                     font=font_bold(12),
-                     text_color=FG_PRIMARY).pack(pady=(10, 2))
-
-        # ---- Column header for order lines (with Actions column) ----
-        line_header = ctk.CTkFrame(right, fg_color="transparent")
-        line_header.pack(fill="x", padx=8, pady=(0, 4))
-
-        # Right-side spacer matching the Remove button width (36px)
-        spacer = ctk.CTkFrame(line_header, fg_color="transparent",
-                              width=36, height=1)
-        spacer.pack(side="right", padx=(0, 6))
-        spacer.pack_propagate(False)
-
-        for text, width in [("Name", 120), ("Size", 50), ("Unit", 40),
-                            ("Qty", 40), ("Cost", 65), ("Subtotal", 75)]:
-            ctk.CTkLabel(line_header, text=text, width=width,
-                         anchor="w", font=font_bold(10),
-                         text_color=FG_SECONDARY).pack(side="left", padx=2)
-
-        self.lines_frame = ctk.CTkScrollableFrame(right, fg_color="transparent")
-        self.lines_frame.pack(fill="both", expand=True, padx=8, pady=(0, 10))
-
-        # ═════════════════════════════════════════
-        # TOTAL
-        # ═════════════════════════════════════════
-
-        total_row = ctk.CTkFrame(self, fg_color="transparent")
-        total_row.pack(fill="x", padx=20, pady=(0, 4))
-
-        ctk.CTkLabel(total_row, text="TOTAL",
-                     font=font_bold(10),
-                     text_color=FG_SECONDARY).pack(side="left")
-
-        self.total_label = ctk.CTkLabel(total_row, text="₱0.00",
-                                        font=font_bold(18),
-                                        text_color=ACCENT)
-        self.total_label.pack(side="right")
-
-        # ═════════════════════════════════════════
-        # NOTES
-        # ═════════════════════════════════════════
-
-        notes_row = ctk.CTkFrame(self, fg_color="transparent")
-        notes_row.pack(fill="x", padx=20, pady=(0, 8))
-
-        ctk.CTkLabel(notes_row, text="NOTES",
-                     font=font_bold(10),
-                     text_color=FG_SECONDARY).pack(anchor="w", pady=(0, 4))
-
-        self.notes_e = ctk.CTkEntry(notes_row, height=34,
-                                    corner_radius=8,
-                                    font=font(12),
-                                    fg_color=BG_INPUT,
-                                    border_color=BORDER,
-                                    border_width=1,
-                                    placeholder_text="Optional notes for this order")
-        self.notes_e.pack(fill="x")
-
-        # ═════════════════════════════════════════
-        # BUTTONS — packed ABOVE the bottom of the dialog
-        # ═════════════════════════════════════════
-
-        btn_row = ctk.CTkFrame(self, fg_color="transparent")
-        btn_row.pack(fill="x", padx=20, pady=(4, 14))
-
-        ctk.CTkButton(btn_row, text="Clear",
-                      width=100, height=38,
-                      corner_radius=8,
-                      font=font_bold(12),
-                      fg_color=NEUTRAL, hover_color=NEUTRAL_HOVER,
-                      text_color=NEUTRAL_TEXT,
-                      command=self._clear).pack(side="left")
-
-        ctk.CTkButton(btn_row, text="Place Order",
-                      height=38,
-                      corner_radius=8,
-                      font=font_bold(13),
-                      fg_color=BRAND_GREEN, hover_color="#1E9040",
-                      command=self._save).pack(side="right", fill="x",
-                                               expand=True, padx=(8, 0))
-
-        self._load_products_for_supplier()
-
-    # ─────────────────────────────────────────────
-    # SUPPLIER
-    # ─────────────────────────────────────────────
-
-    def _on_supplier_change(self, choice):
-        self._load_products_for_supplier()
-
-    def _get_selected_supplier_id(self):
-        supplier_name = self.supplier_var.get()
-        for s in self.suppliers:
-            if s["name"] == supplier_name:
-                return s["supplier_id"]
-        return None
-
-    def _load_products_for_supplier(self):
-        for w in self.products_frame.winfo_children():
-            w.destroy()
-
-        supplier_id = self._get_selected_supplier_id()
-        if supplier_id is None:
-            ctk.CTkLabel(self.products_frame,
-                         text="(no supplier selected)",
-                         font=font(11),
-                         text_color=FG_MUTED).pack(pady=10)
-            return
-
-        products = InventoryController.list_by_supplier(supplier_id)
-        self._supplier_products = products
-
-        if not products:
-            ctk.CTkLabel(self.products_frame,
-                         text="No products for this supplier.",
-                         font=font(11),
-                         text_color=FG_MUTED).pack(pady=10)
-            return
-
-        for p in products:
-            self._render_product_row(p)
-
-    def _render_product_row(self, p):
-        stock_qty = p.get("stock_qty", 0) if hasattr(p, "get") else p["stock_qty"]
-        low_level = ((p.get("low_stock_level", 0) or 0)
-                     if hasattr(p, "get") else (p["low_stock_level"] or 0))
-
-        if stock_qty <= 0:
-            stock_color = DANGER
-        elif stock_qty <= low_level:
-            stock_color = "#D97706"
-        else:
-            stock_color = SUCCESS
-
-        row = ctk.CTkFrame(self.products_frame,
-                           fg_color=BG_INPUT,
-                           corner_radius=6,
-                           border_width=1,
-                           border_color=BORDER,
-                           height=38)
-        row.pack(fill="x", pady=3)
-        row.pack_propagate(False)
-
-        name_label = ctk.CTkLabel(row, text=p["name"] or "-",
-                                  width=140, anchor="w",
-                                  font=font_bold(11),
-                                  text_color=FG_PRIMARY)
-        name_label.pack(side="left", padx=2)
-
-        size_label = ctk.CTkLabel(row, text=p.get("size") or "-",
-                                  width=60, anchor="w",
-                                  font=font(11),
-                                  text_color=FG_SECONDARY)
-        size_label.pack(side="left", padx=2)
-
-        unit_label = ctk.CTkLabel(row, text=p.get("unit") or "-",
-                                  width=45, anchor="w",
-                                  font=font(11),
-                                  text_color=FG_SECONDARY)
-        unit_label.pack(side="left", padx=2)
-
-        cat_label = ctk.CTkLabel(row, text=p.get("category_name") or "-",
-                                 width=90, anchor="w",
-                                 font=font(11),
-                                 text_color=FG_SECONDARY)
-        cat_label.pack(side="left", padx=2)
-
-        stock_label = ctk.CTkLabel(row, text=f"{stock_qty}",
-                                   width=55, anchor="w",
-                                   font=font_bold(11),
-                                   text_color=stock_color)
-        stock_label.pack(side="left", padx=2)
-
-        widgets = [row, name_label, size_label, unit_label, cat_label, stock_label]
-        for w in widgets:
-            w.bind("<Button-1>", lambda e, prod=p: self._add_line(prod))
-            w.bind("<Enter>", lambda e, r=row: r.configure(fg_color="#EAF0FF"))
-            w.bind("<Leave>", lambda e, r=row: r.configure(fg_color=BG_INPUT))
-            try:
-                w.configure(cursor="hand2")
-            except Exception:
-                pass
-
-    # ─────────────────────────────────────────────
-    # ADD LINE
-    # ─────────────────────────────────────────────
-
-    def _add_line(self, product):
-        for line in self.cart:
-            if line["product_id"] == product["product_id"]:
-                messagebox.showinfo("Already added",
-                                    f"{product['name']} is already in the order.")
-                return
-
-        prompt = ctk.CTkToplevel(self)
-        prompt.title(f"Add {product['name']}")
-        prompt.geometry("380x400")
-        prompt.resizable(False, False)
-        prompt.configure(fg_color=BG_MAIN)
-
-        ctk.CTkLabel(prompt, text=product["name"],
-                     font=font_bold(14),
-                     text_color=FG_PRIMARY).pack(pady=(20, 4))
-
-        ctk.CTkLabel(prompt, text=product["product_code"],
-                     font=font(11),
-                     text_color=FG_SECONDARY).pack(pady=(0, 4))
-
-        info_parts = []
-        if product.get("size"):
-            info_parts.append(f"Size: {product['size']}")
-        if product.get("unit"):
-            info_parts.append(f"Unit: {product['unit']}")
-        if product.get("category_name"):
-            info_parts.append(f"Cat: {product['category_name']}")
-        if info_parts:
-            ctk.CTkLabel(prompt, text="  •  ".join(info_parts),
-                         font=font(10),
-                         text_color=FG_MUTED).pack(pady=(0, 4))
-
-        stock_qty = product.get("stock_qty", 0) if hasattr(product, "get") else product["stock_qty"]
-        ctk.CTkLabel(prompt, text=f"Current Stock: {stock_qty}",
-                     font=font_bold(11),
-                     text_color=SUCCESS if stock_qty > 0 else DANGER).pack(pady=(0, 14))
-
-        ctk.CTkLabel(prompt, text="QUANTITY",
-                     font=font_bold(10),
-                     text_color=FG_SECONDARY).pack(anchor="w", padx=30, pady=(0, 4))
-
-        qty_e = ctk.CTkEntry(prompt, width=320, height=36,
-                             corner_radius=8,
-                             font=font(12),
-                             fg_color=BG_INPUT,
-                             border_color=BORDER,
-                             border_width=1)
-        qty_e.pack(padx=30)
-        qty_e.insert(0, "1")
-
-        ctk.CTkLabel(prompt, text="UNIT COST (₱)",
-                     font=font_bold(10),
-                     text_color=FG_SECONDARY).pack(anchor="w", padx=30, pady=(12, 4))
-
-        cost_e = ctk.CTkEntry(prompt, width=320, height=36,
-                              corner_radius=8,
-                              font=font(12),
-                              fg_color=BG_INPUT,
-                              border_color=BORDER,
-                              border_width=1)
-        cost_e.pack(padx=30)
-        cost_e.insert(0, f"{product['price']:.2f}")
-
-        def save():
-            try:
-                qty = int(qty_e.get())
-                cost = float(cost_e.get())
-                if qty <= 0 or cost < 0:
-                    raise ValueError
-            except ValueError:
-                messagebox.showerror("Error", "Enter valid quantity and cost.")
-                return
-
-            self.cart.append({
-                "product_id":    product["product_id"],
-                "name":          product["name"],
-                "code":          product["product_code"],
-                "size":          product.get("size") or "",
-                "unit":          product.get("unit") or "",
-                "category_name": product.get("category_name") or "",
-                "stock_qty":     stock_qty,
-                "quantity":      qty,
-                "cost":          cost,
-            })
-            prompt.destroy()
-            self._render_lines()
-
-        ctk.CTkButton(prompt, text="Add",
-                      width=320, height=40,
-                      corner_radius=8,
-                      font=font_bold(13),
-                      fg_color=BRAND_GREEN, hover_color="#1E9040",
-                      command=save).pack(pady=(20, 20))
-        prepare_dialog_screen(prompt, self)
-
-    # ─────────────────────────────────────────────
-    # RENDER LINES
-    # ─────────────────────────────────────────────
-
-    def _render_lines(self):
-        for w in self.lines_frame.winfo_children():
-            w.destroy()
-
-        if not self.cart:
-            ctk.CTkLabel(self.lines_frame,
-                         text="No items yet",
-                         font=font(11),
-                         text_color=FG_MUTED).pack(pady=20)
-            self.total_label.configure(text="₱0.00")
-            return
-
-        for i, line in enumerate(self.cart):
-            bg = BG_ROW_ALT if i % 2 else BG_CARD
-
-            row = ctk.CTkFrame(self.lines_frame, fg_color=bg, corner_radius=6)
-            row.pack(fill="x", pady=2)
-
-            # ---- Remove button FIRST (packed right so it gets space) ----
-            ctk.CTkButton(row, text="✕", width=32, height=28,
-                          corner_radius=6,
-                          font=font_bold(11),
-                          fg_color=DANGER, hover_color=DANGER_HOVER,
-                          command=lambda pid=line["product_id"]:
-                              self._remove_line(pid)
-                          ).pack(side="right", padx=(4, 6), pady=4)
-
-            # ---- Data cells ----
-            ctk.CTkLabel(row, text=line["name"], width=120,
-                         anchor="w",
-                         font=font_bold(11),
-                         text_color=FG_PRIMARY).pack(side="left", padx=(6, 2), pady=6)
-
-            ctk.CTkLabel(row, text=line.get("size") or "-",
-                         width=50,
-                         anchor="w",
-                         font=font(10),
-                         text_color=FG_SECONDARY).pack(side="left", padx=2)
-
-            ctk.CTkLabel(row, text=line.get("unit") or "-",
-                         width=40,
-                         anchor="w",
-                         font=font(10),
-                         text_color=FG_SECONDARY).pack(side="left", padx=2)
-
-            ctk.CTkLabel(row, text=f"×{line['quantity']}",
-                         width=40,
-                         anchor="w",
-                         font=font(11),
-                         text_color=FG_SECONDARY).pack(side="left", padx=2)
-
-            ctk.CTkLabel(row, text=f"₱{line['cost']:.2f}",
-                         width=65,
-                         anchor="w",
-                         font=font(11),
-                         text_color=FG_SECONDARY).pack(side="left", padx=2)
-
-            subtotal = line["quantity"] * line["cost"]
-            ctk.CTkLabel(row, text=f"₱{subtotal:.2f}",
-                         width=75,
-                         anchor="w",
-                         font=font_bold(11),
-                         text_color=ACCENT).pack(side="left", padx=2)
-
-        total = sum(l["quantity"] * l["cost"] for l in self.cart)
-        self.total_label.configure(text=f"₱{total:.2f}")
-
-    def _remove_line(self, product_id):
-        self.cart = [l for l in self.cart if l["product_id"] != product_id]
-        self._render_lines()
-
-    def _clear(self):
-        self.cart.clear()
-        self._render_lines()
-
-    # ─────────────────────────────────────────────
-    # SAVE
-    # ─────────────────────────────────────────────
-
-    def _save(self):
-        if not self.cart:
-            messagebox.showerror("Error", "Add at least one product to the order.")
-            return
-
-        supplier_id = self._get_selected_supplier_id()
-        if supplier_id is None:
-            messagebox.showerror("Error", "Please select a supplier.")
-            return
-
-        items = [{
-            "product_id": l["product_id"],
-            "quantity":   l["quantity"],
-            "cost":       l["cost"],
-        } for l in self.cart]
-
-        ok, result = PurchaseController.create(
-            self.user, supplier_id, items, self.notes_e.get().strip()
-        )
-        if ok:
-            messagebox.showinfo("Purchase Order Created",
-                                f"PO #{result} created with {len(items)} item(s).")
-            self.on_save()
-            self.destroy()
-        else:
-            messagebox.showerror("Error", result)
-
-
-# ─────────────────────────────────────────────
 # PURCHASE DETAIL DIALOG
 # ─────────────────────────────────────────────
 
@@ -1138,8 +625,9 @@ class PurchaseDetailDialog(ctk.CTkToplevel):
         self.parent = parent
         self.purchase = purchase
         self.title(f"PO #{purchase['purchase_id']}")
-        self.geometry("720x560")
-        self.resizable(False, False)
+        self.geometry("740x660")
+        self.minsize(680, 580)
+        self.resizable(True, True)
         self.configure(fg_color=BG_MAIN)
         self._build()
         prepare_dialog_screen(self, self.parent)
@@ -1156,15 +644,39 @@ class PurchaseDetailDialog(ctk.CTkToplevel):
                      font=font(12),
                      text_color=FG_SECONDARY).pack(pady=(0, 14))
 
+        btn_row = ctk.CTkFrame(self, fg_color="transparent")
+        btn_row.pack(side="bottom", fill="x", padx=20, pady=(8, 16))
+
+        ctk.CTkButton(btn_row, text="Export PDF",
+                      width=140, height=38,
+                      corner_radius=8,
+                      font=font_bold(12),
+                      fg_color=BRAND_GREEN, hover_color="#1E9040",
+                      command=self._export_pdf).pack(side="left")
+
+        ctk.CTkButton(btn_row, text="Close",
+                      width=120, height=38,
+                      corner_radius=8,
+                      font=font_bold(12),
+                      fg_color=NEUTRAL, hover_color=NEUTRAL_HOVER,
+                      text_color=NEUTRAL_TEXT,
+                      command=self.destroy).pack(side="right")
+
         info = ctk.CTkFrame(self, fg_color=BG_CARD,
                             corner_radius=12,
                             border_width=1,
                             border_color=BORDER)
         info.pack(fill="x", padx=20, pady=(0, 10))
 
+        # ⚡ Total still reads purchases.total_cost (user-entered at receive)
+        try:
+            total_val = float(p["total_cost"] or 0)
+        except (TypeError, ValueError):
+            total_val = 0.0
+
         rows = [
             ("Status",        p["status"]),
-            ("Total",         f"₱{p['total_cost']:.2f}"),
+            ("Total",         f"₱{total_val:.2f}"),
             ("Ordered By",    p["full_name"] or p["username"]),
             ("Date Ordered",  p["created_at"]),
             ("Date Received", p["received_at"] or "-"),
@@ -1191,7 +703,7 @@ class PurchaseDetailDialog(ctk.CTkToplevel):
                                   corner_radius=12,
                                   border_width=1,
                                   border_color=BORDER)
-        items_card.pack(fill="both", expand=True, padx=20, pady=(0, 16))
+        items_card.pack(fill="both", expand=True, padx=20, pady=(0, 12))
 
         ctk.CTkLabel(items_card, text="Items",
                      font=font_bold(13),
@@ -1200,10 +712,11 @@ class PurchaseDetailDialog(ctk.CTkToplevel):
         lines = ctk.CTkScrollableFrame(items_card, fg_color="transparent")
         lines.pack(fill="both", expand=True, padx=8, pady=(0, 10))
 
+        # ⚡ Cost / Subtotal columns removed — no longer meaningful
         header = ctk.CTkFrame(lines, fg_color="transparent")
         header.pack(fill="x", pady=(4, 8))
-        for text, width in [("Code", 90), ("Name", 180),
-                            ("Qty", 60), ("Cost", 90), ("Subtotal", 100)]:
+        for text, width in [("Code", 90), ("Name", 280),
+                            ("Ordered", 80), ("Received", 80)]:
             ctk.CTkLabel(header, text=text, width=width,
                          anchor="w",
                          font=font_bold(11),
@@ -1221,30 +734,50 @@ class PurchaseDetailDialog(ctk.CTkToplevel):
                          font=font(11),
                          text_color=FG_SECONDARY).pack(side="left", padx=3, pady=6)
 
-            ctk.CTkLabel(row, text=it["product_name"],
-                         width=180, anchor="w",
+            # ⚡ Name joined with size
+            name_parts = [it["product_name"]]
+            size = it["product_size"] if "product_size" in it.keys() else None
+            if size:
+                name_parts.append(size)
+            display_name = " | ".join(p for p in name_parts if p)
+
+            ctk.CTkLabel(row, text=display_name,
+                         width=280, anchor="w",
                          font=font_bold(11),
                          text_color=FG_PRIMARY).pack(side="left", padx=3)
 
             ctk.CTkLabel(row, text=str(it["quantity"]),
-                         width=60, anchor="w",
+                         width=80, anchor="w",
                          font=font(11),
                          text_color=FG_PRIMARY).pack(side="left", padx=3)
 
-            ctk.CTkLabel(row, text=f"₱{it['cost']:.2f}",
-                         width=90, anchor="w",
-                         font=font(11),
-                         text_color=FG_SECONDARY).pack(side="left", padx=3)
+            recv = it["received_quantity"]
+            recv_text = "-" if recv is None else str(recv)
+            recv_color = FG_MUTED if recv is None else BRAND_GREEN
 
-            ctk.CTkLabel(row, text=f"₱{it['quantity'] * it['cost']:.2f}",
-                         width=100, anchor="w",
+            ctk.CTkLabel(row, text=recv_text,
+                         width=80, anchor="w",
                          font=font_bold(11),
-                         text_color=ACCENT).pack(side="left", padx=3)
+                         text_color=recv_color).pack(side="left", padx=3)
 
-        ctk.CTkButton(self, text="Close",
-                      width=120, height=38,
-                      corner_radius=8,
-                      font=font_bold(12),
-                      fg_color=NEUTRAL, hover_color=NEUTRAL_HOVER,
-                      text_color=NEUTRAL_TEXT,
-                      command=self.destroy).pack(pady=(0, 16))
+    def _export_pdf(self):
+        p = self.purchase
+        items = PurchaseController.get_items(p["purchase_id"])
+
+        purchase_dict = dict(p) if not isinstance(p, dict) else p
+        items_list = [
+            dict(it) if not isinstance(it, dict) else it
+            for it in items
+        ]
+
+        ok, result = export_purchase_pdf(
+            purchase=purchase_dict,
+            items=items_list,
+            parent_window=self.winfo_toplevel(),
+        )
+
+        if ok:
+            messagebox.showinfo("Export Complete",
+                                f"PDF saved to:\n{result}")
+        elif result != "Cancelled.":
+            messagebox.showerror("Export Failed", result)

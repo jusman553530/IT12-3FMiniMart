@@ -3,6 +3,7 @@
 # ─────────────────────────────────────────────
 
 import os
+import re
 from datetime import datetime
 from tkinter import filedialog
 
@@ -72,6 +73,29 @@ SUCCESS     = colors.HexColor("#16A34A")
 
 
 # ─────────────────────────────────────────────
+# AUTO-INCREMENT FILENAME HELPER
+# ─────────────────────────────────────────────
+
+def _next_free_path(path):
+    if not os.path.exists(path):
+        return path
+
+    folder = os.path.dirname(path)
+    base, ext = os.path.splitext(os.path.basename(path))
+
+    match = re.match(r"^(.*?)_(\d+)$", base)
+    if match:
+        base = match.group(1)
+
+    n = 1
+    while True:
+        candidate = os.path.join(folder, f"{base}_{n}{ext}")
+        if not os.path.exists(candidate):
+            return candidate
+        n += 1
+
+
+# ─────────────────────────────────────────────
 # DATA BUILDER
 # ─────────────────────────────────────────────
 
@@ -109,7 +133,6 @@ def build_inventory_report_data(products, filters, exporter_name=""):
             "status_color": status_color,
         })
 
-    # ---- Group by category ----
     groups_map = {}
     for e in enriched:
         groups_map.setdefault(e["category"], []).append(e)
@@ -214,7 +237,6 @@ def render_inventory_report_text(data):
     def hr(ch="="):
         return ch * W
 
-    # ---- Header ----
     line(hr("="))
     line("3F MiniMart".center(W))
     line("Inventory Movement Report".center(W))
@@ -223,7 +245,6 @@ def render_inventory_report_text(data):
         line(_filter_summary_line(data["filters"]).center(W))
     line(hr("="))
 
-    # ---- Summary ----
     s = data["summary"]
     line("SUMMARY")
     line("-" * W)
@@ -236,7 +257,6 @@ def render_inventory_report_text(data):
     line(f"  Low Stock: {s['low_count']}      Out of Stock: {s['out_count']}")
     line(hr("="))
 
-    # ---- Products ----
     line("PRODUCTS")
     line()
 
@@ -287,7 +307,6 @@ def render_inventory_report_text(data):
         )
         line()
 
-    # ---- Footer ----
     line(hr("="))
     line(f"Exported by: {data.get('exporter_name') or '-'}".center(W))
     line(f"Exported on: {data['generated_at']}".center(W))
@@ -333,9 +352,13 @@ def export_inventory_pdf(data, parent_window=None):
         initialfile=default_name,
         filetypes=[("PDF files", "*.pdf"), ("All files", "*.*")],
         parent=parent_window,
+        confirmoverwrite=False,
     )
     if not path:
         return False, "Cancelled."
+
+    # ---- If that exact file exists, auto-pick the next free number ----
+    path = _next_free_path(path)
 
     try:
         _build_pdf(path, data)
@@ -346,7 +369,7 @@ def export_inventory_pdf(data, parent_window=None):
 
 def _default_filename():
     today = datetime.now().strftime("%Y%m%d")
-    return f"3F_Inventory_{today}.pdf"
+    return f"3F_Inventory_{today}_1.pdf"
 
 
 def _build_pdf(path, data):
@@ -417,13 +440,13 @@ def _build_pdf(path, data):
     story.append(Spacer(1, 6))
 
     col_widths = [
-        3.30 * inch,   # Name
-        0.45 * inch,   # Unit
-        0.75 * inch,   # Initial
-        0.65 * inch,   # Stock-In
-        0.70 * inch,   # Stock-Out
-        0.85 * inch,   # Remaining
-        0.55 * inch,   # Status
+        3.30 * inch,
+        0.45 * inch,
+        0.75 * inch,
+        0.65 * inch,
+        0.70 * inch,
+        0.85 * inch,
+        0.55 * inch,
     ]
 
     header = ["Name", "Unit", "Initial", "In", "Out", "Remaining", "Status"]

@@ -2,16 +2,18 @@
 # TRANSACTIONS TAB (embedded inside SalesView)
 # ─────────────────────────────────────────────
 
-import customtkinter as ctk
 from datetime import datetime, timedelta
+import customtkinter as ctk
+from tkinter import messagebox
 
 from controllers.transaction_controller import TransactionController
-from utils import prepare_dialog_screen
+from views.date_picker import DatePickerField
+from utils import prepare_dialog_screen, ui_date_to_db, is_valid_ui_date
 from config import (
     font, font_bold,
     BG_MAIN, BG_CARD, BG_INPUT, BG_ROW_ALT, BORDER,
     FG_PRIMARY, FG_SECONDARY, FG_MUTED,
-    ACCENT, ACCENT_HOVER, SUCCESS,
+    ACCENT, ACCENT_HOVER, SUCCESS, DANGER,
     NEUTRAL, NEUTRAL_HOVER, NEUTRAL_TEXT,
 )
 
@@ -24,17 +26,14 @@ class TransactionsTab(ctk.CTkFrame):
         super().__init__(parent, fg_color=BG_MAIN)
         self.user = user
 
-        # ---- Filter state ----
         self.date_from = ""
         self.date_to = ""
         self.search_query = ""
         self.payment_filter = "All"
 
-        # ---- Active quick-range button ----
         self.active_range_button = None
         self._programmatic_set = False
 
-        # ---- Pagination state ----
         self.current_page = 1
         self.total_pages = 1
 
@@ -46,10 +45,7 @@ class TransactionsTab(ctk.CTkFrame):
     # ─────────────────────────────────────────────
 
     def _build(self):
-        # ═════════════════════════════════════════
-        # SUB-HEADER (small caption only — no big title)
-        # ═════════════════════════════════════════
-
+        # ---- Sub-header ----
         sub_header = ctk.CTkFrame(self, fg_color="transparent")
         sub_header.pack(fill="x", padx=20, pady=(10, 10))
 
@@ -125,7 +121,7 @@ class TransactionsTab(ctk.CTkFrame):
                       fg_color=ACCENT, hover_color=ACCENT_HOVER,
                       command=self._refresh_transactions).pack(side="right")
 
-        # ---- Row 2: date range ----
+        # ---- Row 2: date range (DatePickerField) ----
         row2 = ctk.CTkFrame(filter_card, fg_color="transparent")
         row2.pack(fill="x", padx=16, pady=(0, 14))
 
@@ -136,15 +132,10 @@ class TransactionsTab(ctk.CTkFrame):
         self.date_from_var = ctk.StringVar()
         self.date_from_var.trace_add("write", self._on_date_change)
 
-        self.date_from_e = ctk.CTkEntry(
-            row2, placeholder_text="YYYY-MM-DD",
+        self.date_from_e = DatePickerField(
+            row2,
             textvariable=self.date_from_var,
-            width=130, height=36,
-            corner_radius=8,
-            font=font(12),
-            fg_color=BG_INPUT,
-            border_color=BORDER,
-            border_width=1,
+            width=180, height=36,
         )
         self.date_from_e.pack(side="left", padx=(0, 16))
 
@@ -155,15 +146,10 @@ class TransactionsTab(ctk.CTkFrame):
         self.date_to_var = ctk.StringVar()
         self.date_to_var.trace_add("write", self._on_date_change)
 
-        self.date_to_e = ctk.CTkEntry(
-            row2, placeholder_text="YYYY-MM-DD",
+        self.date_to_e = DatePickerField(
+            row2,
             textvariable=self.date_to_var,
-            width=130, height=36,
-            corner_radius=8,
-            font=font(12),
-            fg_color=BG_INPUT,
-            border_color=BORDER,
-            border_width=1,
+            width=180, height=36,
         )
         self.date_to_e.pack(side="left", padx=(0, 16))
 
@@ -226,7 +212,7 @@ class TransactionsTab(ctk.CTkFrame):
         self.list_frame.pack(fill="both", expand=True, padx=8, pady=8)
 
         # ═════════════════════════════════════════
-        # PAGINATION CONTROLS
+        # PAGINATION
         # ═════════════════════════════════════════
 
         pager = ctk.CTkFrame(list_card, fg_color="transparent")
@@ -303,7 +289,7 @@ class TransactionsTab(ctk.CTkFrame):
             )
 
     # ─────────────────────────────────────────────
-    # FILTERS — SEARCH
+    # FILTERS
     # ─────────────────────────────────────────────
 
     def _on_search_change(self, *args):
@@ -314,18 +300,10 @@ class TransactionsTab(ctk.CTkFrame):
     def _clear_search(self):
         self.search_var.set("")
 
-    # ─────────────────────────────────────────────
-    # FILTERS — PAYMENT
-    # ─────────────────────────────────────────────
-
     def _on_payment_change(self, choice):
         self.payment_filter = choice
         self.current_page = 1
         self._refresh_transactions()
-
-    # ─────────────────────────────────────────────
-    # QUICK-RANGE HIGHLIGHT
-    # ─────────────────────────────────────────────
 
     def _highlight_button(self, button):
         if self.active_range_button is not None:
@@ -343,10 +321,6 @@ class TransactionsTab(ctk.CTkFrame):
             )
         self.active_range_button = None
 
-    # ─────────────────────────────────────────────
-    # FILTERS — DATE RANGE
-    # ─────────────────────────────────────────────
-
     def _on_date_change(self, *args):
         if self._programmatic_set:
             return
@@ -358,9 +332,9 @@ class TransactionsTab(ctk.CTkFrame):
             return
         if d_to and len(d_to) < 10:
             return
-        if d_from and not self._is_valid_date(d_from):
+        if d_from and not is_valid_ui_date(d_from):
             return
-        if d_to and not self._is_valid_date(d_to):
+        if d_to and not is_valid_ui_date(d_to):
             return
         if d_from and d_to and d_from > d_to:
             return
@@ -371,31 +345,24 @@ class TransactionsTab(ctk.CTkFrame):
         self.current_page = 1
         self._refresh_transactions()
 
-    def _is_valid_date(self, text):
-        try:
-            datetime.strptime(text, "%Y-%m-%d")
-            return True
-        except ValueError:
-            return False
-
     # ─────────────────────────────────────────────
     # QUICK RANGES
     # ─────────────────────────────────────────────
 
     def _range_today(self):
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = datetime.now().strftime("%m/%d/%Y")
         self._set_dates_programmatically(today, today, self.btn_today)
 
     def _range_7_days(self):
         today = datetime.now()
-        start = (today - timedelta(days=6)).strftime("%Y-%m-%d")
-        end = today.strftime("%Y-%m-%d")
+        start = (today - timedelta(days=6)).strftime("%m/%d/%Y")
+        end = today.strftime("%m/%d/%Y")
         self._set_dates_programmatically(start, end, self.btn_7days)
 
     def _range_this_month(self):
         today = datetime.now()
-        start = today.replace(day=1).strftime("%Y-%m-%d")
-        end = today.strftime("%Y-%m-%d")
+        start = today.replace(day=1).strftime("%m/%d/%Y")
+        end = today.strftime("%m/%d/%Y")
         self._set_dates_programmatically(start, end, self.btn_month)
 
     def _clear_dates(self):
@@ -419,8 +386,8 @@ class TransactionsTab(ctk.CTkFrame):
 
     def _refresh_transactions(self):
         rows = TransactionController.list(
-            date_from=self.date_from or None,
-            date_to=self.date_to or None,
+            date_from=ui_date_to_db(self.date_from),
+            date_to=ui_date_to_db(self.date_to),
             search=self.search_query or None,
             payment_method=self.payment_filter,
         )
@@ -584,10 +551,6 @@ class TransactionsTab(ctk.CTkFrame):
                 ctk.CTkLabel(row, text="", width=90).pack(side="left", padx=3)
                 ctk.CTkLabel(row, text="", width=64).pack(side="right", padx=4)
 
-    # ─────────────────────────────────────────────
-    # HELPERS
-    # ─────────────────────────────────────────────
-
     @staticmethod
     def _payment_color(method):
         if method == "Cash":
@@ -597,7 +560,7 @@ class TransactionsTab(ctk.CTkFrame):
         return FG_SECONDARY
 
     # ─────────────────────────────────────────────
-    # TRANSACTION DETAIL
+    # DETAIL DIALOG
     # ─────────────────────────────────────────────
 
     def _view_transaction(self, txn):

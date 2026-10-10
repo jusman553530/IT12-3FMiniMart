@@ -27,8 +27,7 @@ def _attach_stock(rows):
     Given a list of product rows, add `stock_qty` and `earliest_expiration`
     keys by aggregating from batches in ONE query (not one per product).
 
-    This is the biggest dashboard performance win — without it, 36 products
-    means 72 aggregate queries per load.
+    ⚡ Uses the shared cached connection — no open/close per call.
     """
     if not rows:
         return []
@@ -38,33 +37,30 @@ def _attach_stock(rows):
     placeholders = ",".join("?" * len(product_ids))
 
     conn = get_connection()
-    try:
-        agg_rows = conn.execute(f"""
-            SELECT
-                product_id,
-                COALESCE(SUM(
-                    CASE
-                        WHEN expiration_date IS NULL OR expiration_date >= ?
-                        THEN quantity
-                        ELSE 0
-                    END
-                ), 0) AS stock_qty,
-                MIN(
-                    CASE
-                        WHEN quantity > 0
-                             AND expiration_date IS NOT NULL
-                             AND expiration_date >= ?
-                        THEN expiration_date
-                        ELSE NULL
-                    END
-                ) AS earliest_expiration
-            FROM batches
-            WHERE is_archived = 0
-              AND product_id IN ({placeholders})
-            GROUP BY product_id
-        """, [today, today] + product_ids).fetchall()
-    finally:
-        conn.close()
+    agg_rows = conn.execute(f"""
+        SELECT
+            product_id,
+            COALESCE(SUM(
+                CASE
+                    WHEN expiration_date IS NULL OR expiration_date >= ?
+                    THEN quantity
+                    ELSE 0
+                END
+            ), 0) AS stock_qty,
+            MIN(
+                CASE
+                    WHEN quantity > 0
+                         AND expiration_date IS NOT NULL
+                         AND expiration_date >= ?
+                    THEN expiration_date
+                    ELSE NULL
+                END
+            ) AS earliest_expiration
+        FROM batches
+        WHERE is_archived = 0
+          AND product_id IN ({placeholders})
+        GROUP BY product_id
+    """, [today, today] + product_ids).fetchall()
 
     agg = {r["product_id"]: r for r in agg_rows}
 
@@ -85,20 +81,20 @@ def _attach_stock(rows):
 
 def get_all_products(include_archived=False):
     conn = get_connection()
+    # ⚡ LEFT JOIN so products with broken supplier/category refs don't vanish
     sql = """
         SELECT p.*,
                s.name AS supplier_name,
                c.name AS category_name
         FROM products p
-        JOIN suppliers  s ON p.supplier_id = s.supplier_id
-        JOIN categories c ON p.category_id = c.category_id
+        LEFT JOIN suppliers  s ON p.supplier_id = s.supplier_id
+        LEFT JOIN categories c ON p.category_id = c.category_id
     """
     if not include_archived:
         sql += " WHERE p.is_archived = 0"
     sql += " ORDER BY c.name, p.name"
 
     rows = conn.execute(sql).fetchall()
-    conn.close()
     return _attach_stock(rows)
 
 
@@ -109,8 +105,8 @@ def get_products_by_category(category_id, include_archived=False):
                s.name AS supplier_name,
                c.name AS category_name
         FROM products p
-        JOIN suppliers  s ON p.supplier_id = s.supplier_id
-        JOIN categories c ON p.category_id = c.category_id
+        LEFT JOIN suppliers  s ON p.supplier_id = s.supplier_id
+        LEFT JOIN categories c ON p.category_id = c.category_id
         WHERE 1=1
     """
     params = []
@@ -122,7 +118,6 @@ def get_products_by_category(category_id, include_archived=False):
     sql += " ORDER BY p.name"
 
     rows = conn.execute(sql, params).fetchall()
-    conn.close()
     return _attach_stock(rows)
 
 
@@ -133,11 +128,10 @@ def get_product(product_id):
                s.name AS supplier_name,
                c.name AS category_name
         FROM products p
-        JOIN suppliers  s ON p.supplier_id = s.supplier_id
-        JOIN categories c ON p.category_id = c.category_id
+        LEFT JOIN suppliers  s ON p.supplier_id = s.supplier_id
+        LEFT JOIN categories c ON p.category_id = c.category_id
         WHERE p.product_id = ?
     """, (product_id,)).fetchone()
-    conn.close()
 
     if row is None:
         return None
@@ -163,12 +157,11 @@ def get_products_by_supplier(supplier_id):
                s.name AS supplier_name,
                c.name AS category_name
         FROM products p
-        JOIN suppliers  s ON p.supplier_id = s.supplier_id
-        JOIN categories c ON p.category_id = c.category_id
+        LEFT JOIN suppliers  s ON p.supplier_id = s.supplier_id
+        LEFT JOIN categories c ON p.category_id = c.category_id
         WHERE p.supplier_id = ? AND p.is_archived = 0
         ORDER BY p.name
     """, (supplier_id,)).fetchall()
-    conn.close()
     return _attach_stock(rows)
 
 
@@ -213,8 +206,6 @@ def add_product(name, price, stock_qty, low_stock_level,
     except Exception as e:
         conn.rollback()
         return False, str(e)
-    finally:
-        conn.close()
 
 
 def update_product(product_id, name, price, low_stock_level,
@@ -237,8 +228,6 @@ def update_product(product_id, name, price, low_stock_level,
         return True, "Product updated."
     except Exception as e:
         return False, str(e)
-    finally:
-        conn.close()
 
 
 def restock_product(product_id, quantity, cost_price=None,
@@ -274,8 +263,6 @@ def restock_product(product_id, quantity, cost_price=None,
     except Exception as e:
         conn.rollback()
         return False, str(e)
-    finally:
-        conn.close()
 
 
 def update_cost_price(product_id, cost_price):
@@ -290,8 +277,6 @@ def update_cost_price(product_id, cost_price):
         return True, "Cost price updated."
     except Exception as e:
         return False, str(e)
-    finally:
-        conn.close()
 
 
 def archive_product(product_id):
@@ -306,8 +291,6 @@ def archive_product(product_id):
         return True, "Product archived."
     except Exception as e:
         return False, str(e)
-    finally:
-        conn.close()
 
 
 def unarchive_product(product_id):
@@ -322,8 +305,6 @@ def unarchive_product(product_id):
         return True, "Product restored."
     except Exception as e:
         return False, str(e)
-    finally:
-        conn.close()
 
 
 # ─────────────────────────────────────────────
@@ -334,9 +315,10 @@ def get_product_counts():
     products = get_all_products(include_archived=False)
 
     total = len(products)
+    # ---- Low stock: at or below threshold, INCLUDING 0 ----
     low = sum(
         1 for p in products
-        if p["stock_qty"] > 0 and p["stock_qty"] <= (p["low_stock_level"] or 0)
+        if p["stock_qty"] <= (p["low_stock_level"] or 0)
     )
     out = sum(1 for p in products if p["stock_qty"] <= 0)
 

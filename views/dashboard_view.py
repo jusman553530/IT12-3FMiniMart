@@ -259,7 +259,9 @@ class DashboardView(ctk.CTkFrame):
         try:
             stats = DashboardController.get_stats()
         except Exception as e:
+            import traceback
             print(f"[Dashboard] get_stats failed: {e}")
+            traceback.print_exc()
             stats = {}
 
         self.sales_card.configure(
@@ -285,7 +287,6 @@ class DashboardView(ctk.CTkFrame):
 
         self._render_expiring()
         self._render_low_stock()
-
     # ─────────────────────────────────────────────
     # EXPIRING SOON
     # ─────────────────────────────────────────────

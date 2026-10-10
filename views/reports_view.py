@@ -9,6 +9,8 @@ import customtkinter as ctk
 
 from utils_pkg.pdf_export import export_sales_report
 from controllers.report_controller import ReportController
+from views.date_picker import DatePickerField
+from utils import ui_date_to_db, is_valid_ui_date
 from config import (
     font, font_bold,
     BG_MAIN, BG_CARD, BG_INPUT, BG_ROW_ALT, BORDER,
@@ -142,6 +144,7 @@ class ReportsTab(ctk.CTkFrame):
                                    border_color=BORDER)
         filter_card.pack(fill="x", padx=20, pady=(0, 10))
 
+        # ---- Row 1: search + payment + refresh/export ----
         row1 = ctk.CTkFrame(filter_card, fg_color="transparent")
         row1.pack(fill="x", padx=16, pady=(14, 6))
 
@@ -203,7 +206,7 @@ class ReportsTab(ctk.CTkFrame):
                       fg_color=ACCENT, hover_color=ACCENT_HOVER,
                       command=self._refresh).pack(side="right")
 
-        # ---- Row 2: date range ----
+        # ---- Row 2: date range (DatePickerField) ----
         row2 = ctk.CTkFrame(filter_card, fg_color="transparent")
         row2.pack(fill="x", padx=16, pady=(0, 14))
 
@@ -214,15 +217,10 @@ class ReportsTab(ctk.CTkFrame):
         self.date_from_var = ctk.StringVar()
         self.date_from_var.trace_add("write", self._on_date_change)
 
-        self.date_from_e = ctk.CTkEntry(
-            row2, placeholder_text="YYYY-MM-DD",
+        self.date_from_e = DatePickerField(
+            row2,
             textvariable=self.date_from_var,
-            width=130, height=36,
-            corner_radius=8,
-            font=font(12),
-            fg_color=BG_INPUT,
-            border_color=BORDER,
-            border_width=1,
+            width=180, height=36,
         )
         self.date_from_e.pack(side="left", padx=(0, 16))
 
@@ -233,15 +231,10 @@ class ReportsTab(ctk.CTkFrame):
         self.date_to_var = ctk.StringVar()
         self.date_to_var.trace_add("write", self._on_date_change)
 
-        self.date_to_e = ctk.CTkEntry(
-            row2, placeholder_text="YYYY-MM-DD",
+        self.date_to_e = DatePickerField(
+            row2,
             textvariable=self.date_to_var,
-            width=130, height=36,
-            corner_radius=8,
-            font=font(12),
-            fg_color=BG_INPUT,
-            border_color=BORDER,
-            border_width=1,
+            width=180, height=36,
         )
         self.date_to_e.pack(side="left", padx=(0, 16))
 
@@ -326,20 +319,20 @@ class ReportsTab(ctk.CTkFrame):
     def _export_pdf(self):
         try:
             summary = ReportController.summary(
-                date_from=self.date_from or None,
-                date_to=self.date_to or None,
+                date_from=ui_date_to_db(self.date_from),
+                date_to=ui_date_to_db(self.date_to),
             )
             products = ReportController.top_selling_products(
-                date_from=self.date_from or None,
-                date_to=self.date_to or None,
+                date_from=ui_date_to_db(self.date_from),
+                date_to=ui_date_to_db(self.date_to),
                 search=self.search_query or None,
                 payment_method=self.payment_filter,
                 limit=5,
             )
             from controllers.transaction_controller import TransactionController
             transactions = TransactionController.list(
-                date_from=self.date_from or None,
-                date_to=self.date_to or None,
+                date_from=ui_date_to_db(self.date_from),
+                date_to=ui_date_to_db(self.date_to),
                 search=self.search_query or None,
                 payment_method=self.payment_filter,
             )
@@ -356,8 +349,8 @@ class ReportsTab(ctk.CTkFrame):
             summary=summary_dict,
             top_products=products,
             transactions=transactions,
-            date_from=self.date_from or None,
-            date_to=self.date_to or None,
+            date_from=ui_date_to_db(self.date_from),
+            date_to=ui_date_to_db(self.date_to),
             payment_filter=self.payment_filter,
             exporter_name=exporter,
             parent_window=self.winfo_toplevel(),
@@ -411,9 +404,9 @@ class ReportsTab(ctk.CTkFrame):
             return
         if d_to and len(d_to) < 10:
             return
-        if d_from and not self._is_valid_date(d_from):
+        if d_from and not is_valid_ui_date(d_from):
             return
-        if d_to and not self._is_valid_date(d_to):
+        if d_to and not is_valid_ui_date(d_to):
             return
         if d_from and d_to and d_from > d_to:
             return
@@ -423,27 +416,24 @@ class ReportsTab(ctk.CTkFrame):
         self.date_to = d_to
         self._refresh()
 
-    def _is_valid_date(self, text):
-        try:
-            datetime.strptime(text, "%Y-%m-%d")
-            return True
-        except ValueError:
-            return False
+    # ─────────────────────────────────────────────
+    # QUICK RANGES (MM/DD/YYYY)
+    # ─────────────────────────────────────────────
 
     def _range_today(self):
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = datetime.now().strftime("%m/%d/%Y")
         self._set_dates_programmatically(today, today, self.btn_today)
 
     def _range_7_days(self):
         today = datetime.now()
-        start = (today - timedelta(days=6)).strftime("%Y-%m-%d")
-        end = today.strftime("%Y-%m-%d")
+        start = (today - timedelta(days=6)).strftime("%m/%d/%Y")
+        end = today.strftime("%m/%d/%Y")
         self._set_dates_programmatically(start, end, self.btn_7days)
 
     def _range_this_month(self):
         today = datetime.now()
-        start = today.replace(day=1).strftime("%Y-%m-%d")
-        end = today.strftime("%Y-%m-%d")
+        start = today.replace(day=1).strftime("%m/%d/%Y")
+        end = today.strftime("%m/%d/%Y")
         self._set_dates_programmatically(start, end, self.btn_month)
 
     def _clear_dates(self):
@@ -467,14 +457,14 @@ class ReportsTab(ctk.CTkFrame):
     def _refresh(self):
         try:
             summary = ReportController.summary(
-                date_from=self.date_from or None,
-                date_to=self.date_to or None,
+                date_from=ui_date_to_db(self.date_from),
+                date_to=ui_date_to_db(self.date_to),
             )
             self._update_summary(summary)
 
             top_products = ReportController.top_selling_products(
-                date_from=self.date_from or None,
-                date_to=self.date_to or None,
+                date_from=ui_date_to_db(self.date_from),
+                date_to=ui_date_to_db(self.date_to),
                 search=self.search_query or None,
                 payment_method=self.payment_filter,
                 limit=5,
@@ -558,6 +548,7 @@ class ReportsTab(ctk.CTkFrame):
             row = ctk.CTkFrame(self.list_frame, fg_color=bg, corner_radius=6)
             row.pack(fill="x", pady=1)
 
+            p = dict(p)
             display = " ".join(
                 part for part in (p.get("brand"), p["product_name"], p.get("size"))
                 if part

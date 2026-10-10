@@ -404,8 +404,12 @@ def update_batch(batch_id, quantity=None, cost_price=None,
     finally:
         conn.close()
 
+# ─────────────────────────────────────────────
+# KPI COUNTS
+# ─────────────────────────────────────────────
+
 def count_expiring_soon(days=30):
-    """Count non-expired batches expiring within `days` days, quantity > 0."""
+    """Count of non-expired batches expiring within `days` days, quantity > 0."""
     conn = get_connection()
     today = now_local()[:10]
     row = conn.execute("""
@@ -422,7 +426,7 @@ def count_expiring_soon(days=30):
 
 
 def count_expired():
-    """Count batches already expired with quantity > 0."""
+    """Count of batches already expired with quantity > 0."""
     conn = get_connection()
     today = now_local()[:10]
     row = conn.execute("""

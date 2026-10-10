@@ -1,5 +1,5 @@
 # ─────────────────────────────────────────────
-# INVENTORY VIEW (batch-aggregated + movement report)
+# INVENTORY VIEW
 # ─────────────────────────────────────────────
 
 from datetime import datetime, timedelta
@@ -12,6 +12,8 @@ from views.product_dialogs import (
     ProductDialog, RestockDialog, BatchesDialog, CategoryDialog,
 )
 from views.inventory_report_dialog import InventoryReportDialog
+from views.date_picker import DatePickerField
+from utils import ui_date_to_db, is_valid_ui_date
 from config import (
     font, font_bold,
     BG_MAIN, BG_CARD, BG_INPUT, BG_ROW_ALT, BORDER,
@@ -34,8 +36,7 @@ class InventoryView(ctk.CTkFrame):
         self.show_archived = False
         self.search_query = ""
 
-        # ---- Filter state ----
-        self.filter_mode = "all"       # "all" | "low"
+        self.filter_mode = "all"
         self.date_from = ""
         self.date_to = ""
         self.active_range_button = None
@@ -100,7 +101,7 @@ class InventoryView(ctk.CTkFrame):
                                    border_color=BORDER)
         filter_card.pack(fill="x", padx=20, pady=(0, 10))
 
-        # ---- Row 1: search + category + archived ----
+        # Row 1
         row1 = ctk.CTkFrame(filter_card, fg_color="transparent")
         row1.pack(fill="x", padx=16, pady=(14, 6))
 
@@ -148,7 +149,7 @@ class InventoryView(ctk.CTkFrame):
                         font=font(12),
                         command=self._toggle_archived).pack(side="left")
 
-        # ---- Row 2: filter mode buttons ----
+        # Row 2
         row2 = ctk.CTkFrame(filter_card, fg_color="transparent")
         row2.pack(fill="x", padx=16, pady=(0, 6))
 
@@ -174,7 +175,7 @@ class InventoryView(ctk.CTkFrame):
         )
         self.btn_low.pack(side="left")
 
-        # ---- Row 3: date range ----
+        # Row 3
         row3 = ctk.CTkFrame(filter_card, fg_color="transparent")
         row3.pack(fill="x", padx=16, pady=(0, 14))
 
@@ -185,22 +186,20 @@ class InventoryView(ctk.CTkFrame):
         self.date_from_var = ctk.StringVar()
         self.date_from_var.trace_add("write", self._on_date_change)
 
-        self.date_from_e = ctk.CTkEntry(
-            row3, placeholder_text="From YYYY-MM-DD",
+        self.date_from_e = DatePickerField(
+            row3,
             textvariable=self.date_from_var,
-            width=140, height=32, corner_radius=8, font=font(11),
-            fg_color=BG_INPUT, border_color=BORDER, border_width=1,
+            width=180, height=36,
         )
         self.date_from_e.pack(side="left", padx=(0, 6))
 
         self.date_to_var = ctk.StringVar()
         self.date_to_var.trace_add("write", self._on_date_change)
 
-        self.date_to_e = ctk.CTkEntry(
-            row3, placeholder_text="To YYYY-MM-DD",
+        self.date_to_e = DatePickerField(
+            row3,
             textvariable=self.date_to_var,
-            width=140, height=32, corner_radius=8, font=font(11),
-            fg_color=BG_INPUT, border_color=BORDER, border_width=1,
+            width=180, height=36,
         )
         self.date_to_e.pack(side="left", padx=(0, 10))
 
@@ -313,7 +312,7 @@ class InventoryView(ctk.CTkFrame):
                                     fg_color=NEUTRAL, text_color=NEUTRAL_TEXT)
 
     # ─────────────────────────────────────────────
-    # SEARCH
+    # SEARCH / FILTER
     # ─────────────────────────────────────────────
 
     def _on_search_change(self, *args):
@@ -323,10 +322,6 @@ class InventoryView(ctk.CTkFrame):
 
     def _clear_search(self):
         self.search_var.set("")
-
-    # ─────────────────────────────────────────────
-    # FILTER MODE
-    # ─────────────────────────────────────────────
 
     def _set_filter_mode(self, mode):
         self.filter_mode = mode
@@ -340,10 +335,6 @@ class InventoryView(ctk.CTkFrame):
             self.btn_low.configure(fg_color=NEUTRAL, text_color=NEUTRAL_TEXT)
 
         self._load()
-
-    # ─────────────────────────────────────────────
-    # CATEGORY / ARCHIVED
-    # ─────────────────────────────────────────────
 
     def _on_category_change(self, choice):
         if choice == "All Categories":
@@ -363,7 +354,7 @@ class InventoryView(ctk.CTkFrame):
         self._load()
 
     # ─────────────────────────────────────────────
-    # DATE RANGE
+    # DATE
     # ─────────────────────────────────────────────
 
     def _on_date_change(self, *args):
@@ -377,9 +368,9 @@ class InventoryView(ctk.CTkFrame):
             return
         if d_to and len(d_to) < 10:
             return
-        if d_from and not self._is_valid_date(d_from):
+        if d_from and not is_valid_ui_date(d_from):
             return
-        if d_to and not self._is_valid_date(d_to):
+        if d_to and not is_valid_ui_date(d_to):
             return
         if d_from and d_to and d_from > d_to:
             return
@@ -387,13 +378,6 @@ class InventoryView(ctk.CTkFrame):
         self._clear_button_highlight()
         self.date_from = d_from
         self.date_to = d_to
-
-    def _is_valid_date(self, text):
-        try:
-            datetime.strptime(text, "%Y-%m-%d")
-            return True
-        except ValueError:
-            return False
 
     def _highlight_button(self, button):
         if self.active_range_button is not None:
@@ -412,19 +396,19 @@ class InventoryView(ctk.CTkFrame):
         self.active_range_button = None
 
     def _range_today(self):
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = datetime.now().strftime("%m/%d/%Y")
         self._set_dates_programmatically(today, today, self.btn_today)
 
     def _range_7_days(self):
         today = datetime.now()
-        start = (today - timedelta(days=6)).strftime("%Y-%m-%d")
-        end = today.strftime("%Y-%m-%d")
+        start = (today - timedelta(days=6)).strftime("%m/%d/%Y")
+        end = today.strftime("%m/%d/%Y")
         self._set_dates_programmatically(start, end, self.btn_7days)
 
     def _range_this_month(self):
         today = datetime.now()
-        start = today.replace(day=1).strftime("%Y-%m-%d")
-        end = today.strftime("%Y-%m-%d")
+        start = today.replace(day=1).strftime("%m/%d/%Y")
+        end = today.strftime("%m/%d/%Y")
         self._set_dates_programmatically(start, end, self.btn_month)
 
     def _clear_dates(self):
@@ -489,11 +473,9 @@ class InventoryView(ctk.CTkFrame):
         end = start + self.PAGE_SIZE
         page_products = products[start:end]
 
-        # ---- Header row ----
         header = ctk.CTkFrame(self.list_frame, fg_color="transparent")
         header.pack(fill="x", pady=(4, 8))
 
-        # Right-side spacer to reserve room for the actions column
         if AuthController.is_admin():
             spacer = ctk.CTkFrame(header, fg_color="transparent",
                                   width=290, height=1)
@@ -519,9 +501,10 @@ class InventoryView(ctk.CTkFrame):
                          text_color=FG_SECONDARY).pack(side="left", padx=3)
 
         if not page_products:
-            msg = "No products match your filters." if (self.search_query or
-                                                         self.filter_mode == "low") else None
-            msg = msg or "No products to show."
+            if self.search_query or self.filter_mode == "low":
+                msg = "No products match your filters."
+            else:
+                msg = "No products to show."
             ctk.CTkLabel(self.list_frame, text=msg,
                          font=font(12),
                          text_color=FG_MUTED).pack(pady=30)
@@ -538,9 +521,6 @@ class InventoryView(ctk.CTkFrame):
         row = ctk.CTkFrame(self.list_frame, fg_color=bg, corner_radius=6)
         row.pack(fill="x", pady=2)
 
-        # ═════════════════════════════════════════
-        # ACTION BUTTONS FIRST (pack right, priority space)
-        # ═════════════════════════════════════════
         if AuthController.is_admin():
             actions = ctk.CTkFrame(row, fg_color="transparent",
                                    width=290, height=28)
@@ -583,10 +563,6 @@ class InventoryView(ctk.CTkFrame):
                               fg_color=DANGER, hover_color=DANGER_HOVER,
                               command=lambda prod=p: self._archive(prod)
                               ).pack(side="left")
-
-        # ═════════════════════════════════════════
-        # DATA COLUMNS
-        # ═════════════════════════════════════════
 
         ctk.CTkLabel(row, text=p["product_code"] or "-",
                      width=85, anchor="w", font=font(11),
@@ -750,8 +726,8 @@ class InventoryView(ctk.CTkFrame):
             "product_id":    None,
             "product_name":  None,
             "category":      self.category_var.get() if self.selected_category_id else None,
-            "date_from":     self.date_from or None,
-            "date_to":       self.date_to or None,
+            "date_from":     ui_date_to_db(self.date_from),
+            "date_to":       ui_date_to_db(self.date_to),
             "show_archived": self.show_archived,
             "low_only":      self.filter_mode == "low",
             "search":        self.search_query or None,
