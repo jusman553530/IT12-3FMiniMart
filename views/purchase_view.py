@@ -133,7 +133,7 @@ class PurchaseView(ctk.CTkFrame):
                       fg_color=ACCENT, hover_color=ACCENT_HOVER,
                       command=self._load).pack(side="right")
 
-        # ---- Row 2: date range (DatePickerField) ----
+        # ---- Row 2 ----
         row2 = ctk.CTkFrame(filter_card, fg_color="transparent")
         row2.pack(fill="x", padx=16, pady=(0, 14))
 
@@ -493,7 +493,6 @@ class PurchaseView(ctk.CTkFrame):
                      font=font(11),
                      text_color=FG_PRIMARY).pack(side="left", padx=3)
 
-        # ---- Total (reads purchases.total_cost) ----
         try:
             total_val = float(p["total_cost"] or 0)
         except (TypeError, ValueError):
@@ -566,7 +565,7 @@ class PurchaseView(ctk.CTkFrame):
             purchase,
             items,
         )
-        # ⚡ Caller blocks here. The dialog does NOT block on construction.
+        # ⚡ Caller blocks — the dialog does NOT call wait_window itself.
         dialog.wait_window()
 
         if not dialog.confirmed:
@@ -668,7 +667,6 @@ class PurchaseDetailDialog(ctk.CTkToplevel):
                             border_color=BORDER)
         info.pack(fill="x", padx=20, pady=(0, 10))
 
-        # ⚡ Total still reads purchases.total_cost (user-entered at receive)
         try:
             total_val = float(p["total_cost"] or 0)
         except (TypeError, ValueError):
@@ -712,10 +710,9 @@ class PurchaseDetailDialog(ctk.CTkToplevel):
         lines = ctk.CTkScrollableFrame(items_card, fg_color="transparent")
         lines.pack(fill="both", expand=True, padx=8, pady=(0, 10))
 
-        # ⚡ Cost / Subtotal columns removed — no longer meaningful
         header = ctk.CTkFrame(lines, fg_color="transparent")
         header.pack(fill="x", pady=(4, 8))
-        for text, width in [("Code", 90), ("Name", 280),
+        for text, width in [("Code", 90), ("Name", 260),
                             ("Ordered", 80), ("Received", 80)]:
             ctk.CTkLabel(header, text=text, width=width,
                          anchor="w",
@@ -734,7 +731,6 @@ class PurchaseDetailDialog(ctk.CTkToplevel):
                          font=font(11),
                          text_color=FG_SECONDARY).pack(side="left", padx=3, pady=6)
 
-            # ⚡ Name joined with size
             name_parts = [it["product_name"]]
             size = it["product_size"] if "product_size" in it.keys() else None
             if size:
@@ -742,7 +738,7 @@ class PurchaseDetailDialog(ctk.CTkToplevel):
             display_name = " | ".join(p for p in name_parts if p)
 
             ctk.CTkLabel(row, text=display_name,
-                         width=280, anchor="w",
+                         width=260, anchor="w",
                          font=font_bold(11),
                          text_color=FG_PRIMARY).pack(side="left", padx=3)
 

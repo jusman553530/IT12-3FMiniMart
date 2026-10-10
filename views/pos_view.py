@@ -19,6 +19,35 @@ from config import (
 )
 
 
+# ─────────────────────────────────────────────
+# ⚡ INPUT VALIDATORS
+# ─────────────────────────────────────────────
+
+def _validate_money_input(proposed: str) -> bool:
+    """Allow digits and at most one decimal point with up to 2 decimals.
+    Empty string is allowed (user is clearing the field)."""
+    if proposed == "":
+        return True
+    # Only digits and a single dot
+    if not all(ch.isdigit() or ch == "." for ch in proposed):
+        return False
+    if proposed.count(".") > 1:
+        return False
+    # At most two digits after the dot
+    if "." in proposed:
+        _, _, decimals = proposed.partition(".")
+        if len(decimals) > 2:
+            return False
+    return True
+
+
+def _validate_int_input(proposed: str) -> bool:
+    """Allow digits only. Empty string allowed."""
+    if proposed == "":
+        return True
+    return proposed.isdigit()
+
+
 class POSView(ctk.CTkFrame):
 
     def __init__(self, parent, user):
@@ -33,8 +62,17 @@ class POSView(ctk.CTkFrame):
         self._card_refs = {}
         self._render_sig = None
 
+        # ⚡ Register the validators as Tcl commands so we can reference them
+        #    from validate="key" entries. Needs to run once per widget root.
+        self._register_validators()
+
         self._build()
         self._refresh_cart(rerender_products=False)
+
+    def _register_validators(self):
+        top = self.winfo_toplevel()
+        top.tk.createcommand("ValidateMoney", lambda *a: _validate_money_input(*a[1:]))
+        top.tk.createcommand("ValidateInt", lambda *a: _validate_int_input(*a[1:]))
 
     # ─────────────────────────────────────────────
     # BUILD
@@ -186,10 +224,15 @@ class POSView(ctk.CTkFrame):
                                          text_color=FG_SECONDARY, anchor="w")
         self.amount_label.pack(fill="x", padx=16, pady=(0, 4))
 
-        self.amount_entry = ctk.CTkEntry(right, height=38, corner_radius=8,
-                                         font=font(13), fg_color=BG_INPUT,
-                                         border_color=BORDER, border_width=1,
-                                         placeholder_text="0.00")
+        # ⚡ Amount Paid — reject non-numeric as the user types
+        amount_vcmd = (self.register(_validate_money_input), "%P")
+        self.amount_entry = ctk.CTkEntry(
+            right, height=38, corner_radius=8,
+            font=font(13), fg_color=BG_INPUT,
+            border_color=BORDER, border_width=1,
+            placeholder_text="0.00",
+            validate="key", validatecommand=amount_vcmd,
+        )
         self.amount_entry.pack(fill="x", padx=16, pady=(0, 12))
 
         self.payment_var.trace_add("write", self._on_payment_method_change)
@@ -335,9 +378,6 @@ class POSView(ctk.CTkFrame):
         card.pack_propagate(False)
         self._cards[product["product_id"]] = card
 
-        # ─────────────────────────────────────────────
-        # INFO BLOCK (starts at the left edge — thumbnail removed)
-        # ─────────────────────────────────────────────
         info = ctk.CTkFrame(card, fg_color="transparent")
         info.place(x=16, rely=0.5, anchor="w")
 
@@ -393,6 +433,22 @@ class POSView(ctk.CTkFrame):
                                    text_color=stock_color)
         stock_label.pack(side="left")
 
+        # ---- Category ----
+        category_name = None
+        try:
+            category_name = product["category_name"]
+        except (KeyError, IndexError):
+            category_name = None
+
+        sep3 = ctk.CTkLabel(meta, text="  •  ", font=font(10),
+                            text_color=FG_MUTED)
+        sep3.pack(side="left")
+
+        cat_label = ctk.CTkLabel(meta, text=category_name or "—",
+                                 font=font(10),
+                                 text_color=FG_SECONDARY)
+        cat_label.pack(side="left")
+
         if out_of_stock:
             click_action = lambda prod=product: messagebox.showwarning(
                 "Out of Stock",
@@ -422,7 +478,8 @@ class POSView(ctk.CTkFrame):
 
         widgets = [
             card, info, name_label,
-            meta, code_label, sep1, price_label, sep2, stock_label,
+            meta, code_label, sep1, price_label, sep2,
+            stock_label, sep3, cat_label,
         ]
 
         for w in widgets:
@@ -636,12 +693,15 @@ class POSView(ctk.CTkFrame):
                           command=lambda pid=item["product_id"]: self._decrease(pid)
                           ).pack(side="left")
 
+            # ⚡ Qty entry — reject non-digit characters as typed
             qty_var = ctk.StringVar(value=str(item["quantity"]))
+            qty_vcmd = (self.register(_validate_int_input), "%P")
             qty_e = ctk.CTkEntry(stepper, textvariable=qty_var,
                                  width=44, height=26, corner_radius=6,
                                  font=font(12),
                                  fg_color=BG_INPUT, border_color=BORDER,
-                                 border_width=1, justify="center")
+                                 border_width=1, justify="center",
+                                 validate="key", validatecommand=qty_vcmd)
             qty_e.pack(side="left", padx=2)
 
             def commit(pid=item["product_id"], var=qty_var, mx=max_qty):
@@ -753,6 +813,8 @@ class POSView(ctk.CTkFrame):
             total=total, amount_paid=paid, payment_method=method,
             change=change, gcash_reference=gcash_reference,
         )
+        confirm.wait_window()
+
         if not confirm.confirmed:
             return
 
@@ -799,6 +861,10 @@ class POSView(ctk.CTkFrame):
 # ─────────────────────────────────────────────
 
 class CheckoutConfirmDialog(ctk.CTkToplevel):
+    """
+    Modal confirmation dialog for checkout.
+    Caller blocks via dlg.wait_window().
+    """
 
     def __init__(self, parent, total, amount_paid, payment_method, change,
                  gcash_reference=None):
@@ -812,30 +878,51 @@ class CheckoutConfirmDialog(ctk.CTkToplevel):
         self.confirmed = False
 
         self.title("Confirm Checkout")
-        self.geometry("440x400")
+        self.geometry("460x480")
+        self.minsize(440, 460)
         self.resizable(False, False)
         self.configure(fg_color=BG_MAIN)
+
         self._build()
         prepare_dialog_screen(self, self.parent)
+        self.after(10, self._finalize_modal)
 
-        self.transient(parent)
-        self.grab_set()
-        self.focus_force()
-        self.wait_window(self)
+    def _finalize_modal(self):
+        if not self.winfo_exists():
+            return
+        try:
+            self.transient(self.parent)
+        except Exception:
+            pass
+        try:
+            self.grab_set()
+        except Exception:
+            pass
+        try:
+            self.lift()
+            self.focus_force()
+        except Exception:
+            pass
 
     def _build(self):
-        ctk.CTkLabel(self, text="Confirm Checkout",
+        header = ctk.CTkFrame(self, fg_color="transparent")
+        header.pack(fill="x", padx=24, pady=(20, 12))
+
+        ctk.CTkLabel(header, text="Confirm Checkout",
                      font=font_bold(18),
-                     text_color=FG_PRIMARY).pack(pady=(20, 4))
-        ctk.CTkLabel(self,
+                     text_color=FG_PRIMARY,
+                     anchor="w").pack(fill="x")
+        ctk.CTkLabel(header,
                      text="Please review the transaction before confirming",
                      font=font(11),
-                     text_color=FG_SECONDARY).pack(pady=(0, 14))
+                     text_color=FG_SECONDARY,
+                     anchor="w").pack(fill="x", pady=(2, 0))
 
         card = ctk.CTkFrame(self, fg_color=BG_CARD,
-                            corner_radius=12, border_width=1,
+                            corner_radius=12,
+                            border_width=1,
                             border_color=BORDER)
-        card.pack(fill="x", padx=24, pady=(0, 10))
+        card.pack(fill="x", padx=24, pady=(0, 12))
 
         rows = [
             ("Total",          f"₱{self.total:.2f}",        ACCENT),
@@ -852,11 +939,46 @@ class CheckoutConfirmDialog(ctk.CTkToplevel):
             if i > 0:
                 ctk.CTkFrame(card, height=1, fg_color=BORDER).pack(
                     fill="x", padx=14)
+
             row = ctk.CTkFrame(card, fg_color="transparent")
             row.pack(fill="x", padx=14, pady=10)
-            ctk.CTkLabel(row, text=label, font=font_bold(11),
+
+            ctk.CTkLabel(row, text=label,
+                         font=font_bold(11),
                          text_color=FG_SECONDARY,
-                         anchor="w").pack(side="left")
-            ctk.CTkLabel(row, text=value, anchor="e",
+                         anchor="w").pack(side="left", fill="x", expand=True)
+
+            ctk.CTkLabel(row, text=value,
                          font=font_bold(13),
-                         text_color=color).pack
+                         text_color=color,
+                         anchor="e",
+                         width=160,
+                         justify="right").pack(side="right")
+
+        btn_row = ctk.CTkFrame(self, fg_color="transparent")
+        btn_row.pack(side="bottom", fill="x", padx=24, pady=(8, 20))
+
+        ctk.CTkButton(btn_row, text="Cancel",
+                      width=140, height=42,
+                      corner_radius=8,
+                      font=font_bold(13),
+                      fg_color=NEUTRAL, hover_color=NEUTRAL_HOVER,
+                      text_color=NEUTRAL_TEXT,
+                      command=self._cancel).pack(side="left")
+
+        ctk.CTkButton(btn_row, text="Confirm",
+                      height=42,
+                      corner_radius=8,
+                      font=font_bold(13),
+                      fg_color=BRAND_GREEN, hover_color="#1E9040",
+                      command=self._confirm).pack(side="right",
+                                                  fill="x", expand=True,
+                                                  padx=(8, 0))
+
+    def _confirm(self):
+        self.confirmed = True
+        self.destroy()
+
+    def _cancel(self):
+        self.confirmed = False
+        self.destroy()

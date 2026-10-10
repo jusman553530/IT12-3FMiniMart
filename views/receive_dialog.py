@@ -3,34 +3,32 @@
 # ─────────────────────────────────────────────
 #
 # Columns:
-#   ✓            — checkbox (include/skip line)
-#   Code         — product code
-#   Name         — product name | size
-#   Ordered      — ordered qty + unit (informational)
-#   Received     — editable: how many boxes/packs arrived (informational)
-#   Cost / Unit  — editable: cost per box/pack (user-typed)
-#   Total Pieces — editable: pieces to add to inventory
+#   ✓               — checkbox
+#   Code            — product code
+#   Name            — product name | size
+#   Ordered         — ordered qty + unit (informational)
+#   Received        — editable: boxes/packs arrived (digits only)
+#   Cost / Unit     — editable: cost per box/pack (money)
+#   Expiration Date — editable: MM/DD/YYYY (auto-formatted)
+#   Total Pieces    — editable: pieces → inventory (digits only)
 #
 # Bottom:
 #   Total Amount of Purchase Order — auto = Σ (Cost/Unit × Received)
-#                                    over checked rows. User can override.
 #
 # IMPORTANT — modal contract:
-#   This dialog does NOT block on construction. The caller MUST do:
-#
+#   Caller must do:
 #       dialog = ReceiveConfirmDialog(parent, purchase, items)
 #       dialog.wait_window()
-#       if dialog.confirmed:
-#           ...
-#
-#   Blocking inside the dialog (via wait_window in __init__ or in an
-#   `after` callback) causes Tk callback reentrancy — the app freezes
-#   when the dialog destroys itself.
+#       if dialog.confirmed: ...
 
 import customtkinter as ctk
 from tkinter import messagebox
 
-from utils import prepare_dialog_screen
+from utils import (
+    prepare_dialog_screen,
+    ui_date_to_db,
+    is_valid_ui_date,
+)
 from config import (
     font, font_bold,
     BG_MAIN, BG_CARD, BG_ROW_ALT, BG_INPUT, BORDER,
@@ -38,6 +36,54 @@ from config import (
     BRAND_GREEN, ACCENT,
     NEUTRAL, NEUTRAL_HOVER, NEUTRAL_TEXT,
 )
+
+
+# ─────────────────────────────────────────────
+# ⚡ INPUT VALIDATORS
+# ─────────────────────────────────────────────
+
+def _validate_int_input(proposed: str) -> bool:
+    """Digits only. Empty string allowed (user clearing the field)."""
+    if proposed == "":
+        return True
+    return proposed.isdigit()
+
+
+def _validate_money_input(proposed: str) -> bool:
+    """Digits and at most one decimal point with up to 2 decimals."""
+    if proposed == "":
+        return True
+    if not all(ch.isdigit() or ch == "." for ch in proposed):
+        return False
+    if proposed.count(".") > 1:
+        return False
+    if "." in proposed:
+        _, _, decimals = proposed.partition(".")
+        if len(decimals) > 2:
+            return False
+    return True
+
+
+def _validate_date_input(proposed: str) -> bool:
+    """Allow digits and '/' only, max length 10 (MM/DD/YYYY)."""
+    if proposed == "":
+        return True
+    if len(proposed) > 10:
+        return False
+    return all(ch.isdigit() or ch == "/" for ch in proposed)
+
+
+def _autofill_date_slashes(raw: str) -> str:
+    """Insert '/' automatically after MM and DD. Strips existing slashes
+    first so backspacing still works."""
+    digits = "".join(ch for ch in raw if ch.isdigit())
+    digits = digits[:8]  # max MMDDYYYY
+
+    if len(digits) <= 2:
+        return digits
+    if len(digits) <= 4:
+        return f"{digits[:2]}/{digits[2:]}"
+    return f"{digits[:2]}/{digits[2:4]}/{digits[4:]}"
 
 
 class ReceiveConfirmDialog(ctk.CTkToplevel):
@@ -50,33 +96,29 @@ class ReceiveConfirmDialog(ctk.CTkToplevel):
         self.confirmed = False
 
         self._check_vars = {}          # product_id → BooleanVar
-        self._received_entries = {}    # product_id → Entry (boxes/packs received)
+        self._received_entries = {}    # product_id → Entry (boxes/packs)
         self._cost_entries = {}        # product_id → Entry (cost per unit)
-        self._pieces_entries = {}      # product_id → Entry (pieces → inventory)
-        self._line_meta = {}           # product_id → { pieces_per_unit, unit }
+        self._expiry_entries = {}      # product_id → Entry (MM/DD/YYYY)
+        self._pieces_entries = {}      # product_id → Entry (pieces)
 
         self.received_quantities = {}  # { product_id: pieces }
         self.line_costs = {}           # { product_id: cost_per_unit }
+        self.expiration_dates = {}     # { product_id: "YYYY-MM-DD" or None }
         self.total_amount = 0.0
 
-        # User override flag for the bottom total field
         self._total_overridden = False
 
         self.title(f"Receive PO #{purchase['purchase_id']}")
-        self.geometry("1080x740")
-        self.minsize(1000, 620)
+        self.geometry("1220x740")
+        self.minsize(1120, 640)
         self.resizable(True, True)
         self.configure(fg_color=BG_MAIN)
 
         self._build()
         prepare_dialog_screen(self, self.parent)
-
-        # Defer transient/grab/lift until the window is mapped. Do NOT
-        # call wait_window here — the caller does that.
         self.after(10, self._finalize_modal)
 
     def _finalize_modal(self):
-        # The dialog may have been cancelled before this fires.
         if not self.winfo_exists():
             return
         try:
@@ -112,16 +154,16 @@ class ReceiveConfirmDialog(ctk.CTkToplevel):
 
         ctk.CTkLabel(self,
                      text="Check each item that arrived. Total Pieces is what "
-                          "gets added to inventory. Received shows how many "
-                          "boxes/packs came in. Total Amount auto-fills from "
-                          "Cost × Received, but you can edit it.",
+                          "gets added to inventory. Expiration Date is "
+                          "MM/DD/YYYY (optional). Total Amount auto-fills "
+                          "from Cost × Received, but you can edit it.",
                      font=font(11),
                      text_color=FG_MUTED,
-                     wraplength=980,
+                     wraplength=1120,
                      justify="center").pack(pady=(0, 14))
 
         # ═════════════════════════════════════════
-        # BUTTONS — pinned bottom
+        # BUTTONS
         # ═════════════════════════════════════════
 
         btn_row = ctk.CTkFrame(self, fg_color="transparent")
@@ -136,8 +178,7 @@ class ReceiveConfirmDialog(ctk.CTkToplevel):
                       command=self._cancel).pack(side="left")
 
         self.toggle_all_btn = ctk.CTkButton(
-            btn_row,
-            text="Deselect All",
+            btn_row, text="Deselect All",
             width=130, height=40,
             corner_radius=8,
             font=font_bold(11),
@@ -211,13 +252,14 @@ class ReceiveConfirmDialog(ctk.CTkToplevel):
         header = ctk.CTkFrame(lines, fg_color="transparent")
         header.pack(fill="x", pady=(4, 8))
         header_cols = [
-            ("✓",             36),
-            ("Code",          80),
-            ("Name",         220),
-            ("Ordered",      110),
-            ("Received",     100),
-            ("Cost / Unit",  110),
-            ("Total Pieces", 110),
+            ("✓",                36),
+            ("Code",             80),
+            ("Name",            200),
+            ("Ordered",         105),
+            ("Received",         90),
+            ("Cost / Unit",     100),
+            ("Expiration Date", 150),
+            ("Total Pieces",    105),
         ]
         for text, width in header_cols:
             ctk.CTkLabel(header, text=text, width=width,
@@ -263,6 +305,8 @@ class ReceiveConfirmDialog(ctk.CTkToplevel):
                       command=self._reset_total_to_auto).pack(
                           side="right", padx=(8, 0))
 
+        # ⚡ Total Amount — money validation
+        total_vcmd = (self.register(_validate_money_input), "%P")
         self.total_entry = ctk.CTkEntry(
             total_row,
             width=180, height=36,
@@ -272,6 +316,7 @@ class ReceiveConfirmDialog(ctk.CTkToplevel):
             border_color=BORDER,
             border_width=1,
             justify="right",
+            validate="key", validatecommand=total_vcmd,
         )
         self.total_entry.pack(side="right")
         self.total_entry.bind("<KeyRelease>", self._on_total_typed)
@@ -288,11 +333,6 @@ class ReceiveConfirmDialog(ctk.CTkToplevel):
         unit   = item["unit"] if "unit" in item.keys() and item["unit"] else "pc"
         pieces = item["pieces_per_unit"] if "pieces_per_unit" in item.keys() else 1
         pieces = pieces or 1
-
-        self._line_meta[item["product_id"]] = {
-            "pieces_per_unit": pieces,
-            "unit": unit,
-        }
 
         # ---- Checkbox ----
         var = ctk.BooleanVar(value=True)
@@ -326,22 +366,43 @@ class ReceiveConfirmDialog(ctk.CTkToplevel):
         display_name = " | ".join(p for p in name_parts if p)
 
         ctk.CTkLabel(row, text=display_name,
-                     width=220, anchor="w",
+                     width=200, anchor="w",
                      font=font_bold(11),
                      text_color=FG_PRIMARY).pack(side="left", padx=3)
 
-        # ---- Ordered (info only) ----
+        # ---- Ordered ----
         ordered_text = f"{qty} {unit}"
         if pieces > 1:
             ordered_text += f" ({qty * pieces} pc)"
 
         ctk.CTkLabel(row, text=ordered_text,
-                     width=110, anchor="w",
+                     width=105, anchor="w",
                      font=font(11),
                      text_color=FG_SECONDARY).pack(side="left", padx=3)
 
-        # ---- Received (editable, boxes/packs — informational only) ----
+        # ---- Received (editable, boxes/packs) — digits only ----
+        recv_vcmd = (self.register(_validate_int_input), "%P")
         recv_e = ctk.CTkEntry(
+            row,
+            width=80, height=30,
+            corner_radius=6,
+            font=font(12),
+            fg_color=BG_INPUT,
+            border_color=BORDER,
+            border_width=1,
+            justify="center",
+            placeholder_text="0",
+            validate="key", validatecommand=recv_vcmd,
+        )
+        recv_e.pack(side="left", padx=3)
+        recv_e.insert(0, str(qty))
+        recv_e.bind("<KeyRelease>",
+                    lambda e, pid=item["product_id"]: self._recompute_total())
+        self._received_entries[item["product_id"]] = recv_e
+
+        # ---- Cost / Unit (editable) — money ----
+        cost_vcmd = (self.register(_validate_money_input), "%P")
+        cost_e = ctk.CTkEntry(
             row,
             width=90, height=30,
             corner_radius=6,
@@ -350,46 +411,79 @@ class ReceiveConfirmDialog(ctk.CTkToplevel):
             border_color=BORDER,
             border_width=1,
             justify="center",
-            placeholder_text="0",
-        )
-        recv_e.pack(side="left", padx=3)
-        recv_e.insert(0, str(qty))
-        recv_e.bind("<KeyRelease>",
-                    lambda e, pid=item["product_id"]: self._recompute_total())
-        self._received_entries[item["product_id"]] = recv_e
-
-        # ---- Cost / Unit (editable, user-typed, blank by default) ----
-        cost_e = ctk.CTkEntry(
-            row,
-            width=100, height=30,
-            corner_radius=6,
-            font=font(12),
-            fg_color=BG_INPUT,
-            border_color=BORDER,
-            border_width=1,
-            justify="center",
             placeholder_text="0.00",
+            validate="key", validatecommand=cost_vcmd,
         )
         cost_e.pack(side="left", padx=3)
         cost_e.bind("<KeyRelease>",
                     lambda e, pid=item["product_id"]: self._recompute_total())
         self._cost_entries[item["product_id"]] = cost_e
 
-        # ---- Total Pieces (editable, what goes to inventory) ----
+        # ---- Expiration Date (auto-format MM/DD/YYYY) ----
+        expiry_vcmd = (self.register(_validate_date_input), "%P")
+        expiry_e = ctk.CTkEntry(
+            row,
+            width=140, height=30,
+            corner_radius=6,
+            font=font(12),
+            fg_color=BG_INPUT,
+            border_color=BORDER,
+            border_width=1,
+            justify="center",
+            placeholder_text="MM/DD/YYYY",
+            validate="key", validatecommand=expiry_vcmd,
+        )
+        expiry_e.pack(side="left", padx=3)
+
+        # If the PO line already carries an expiration date, pre-fill it
+        existing = None
+        if "expiration_date" in item.keys():
+            existing = item["expiration_date"]
+        if existing:
+            try:
+                y, m, d = existing.split("-")
+                expiry_e.insert(0, f"{m}/{d}/{y}")
+            except Exception:
+                expiry_e.insert(0, existing)
+
+        # ⚡ Auto-insert "/" separators as user types
+        expiry_e.bind(
+            "<KeyRelease>",
+            lambda e, entry=expiry_e: self._reformat_expiry(entry)
+        )
+
+        self._expiry_entries[item["product_id"]] = expiry_e
+
+        # ---- Total Pieces (editable) — digits only ----
+        pieces_vcmd = (self.register(_validate_int_input), "%P")
         default_pieces = qty * pieces
         pieces_e = ctk.CTkEntry(
             row,
-            width=100, height=30,
+            width=95, height=30,
             corner_radius=6,
             font=font_bold(12),
             fg_color=BG_INPUT,
             border_color=ACCENT,
             border_width=2,
             justify="center",
+            validate="key", validatecommand=pieces_vcmd,
         )
         pieces_e.pack(side="left", padx=3)
         pieces_e.insert(0, str(default_pieces))
         self._pieces_entries[item["product_id"]] = pieces_e
+
+    # ─────────────────────────────────────────────
+    # ⚡ EXPIRY AUTO-FORMAT HELPER
+    # ─────────────────────────────────────────────
+
+    def _reformat_expiry(self, entry):
+        """Insert '/' separators as the user types. Keeps cursor at end."""
+        current = entry.get()
+        formatted = _autofill_date_slashes(current)
+        if formatted != current:
+            entry.delete(0, "end")
+            entry.insert(0, formatted)
+            entry.icursor("end")
 
     # ─────────────────────────────────────────────
     # TOTAL MATH
@@ -418,8 +512,6 @@ class ReceiveConfirmDialog(ctk.CTkToplevel):
 
             total += cost_val * recv_val
 
-        # ⚡ Guard: the entry may already be destroyed if we're called during
-        #    teardown via a stray <KeyRelease>.
         if not self.total_entry.winfo_exists():
             return
         self.total_entry.delete(0, "end")
@@ -466,7 +558,7 @@ class ReceiveConfirmDialog(ctk.CTkToplevel):
     # ─────────────────────────────────────────────
 
     def _confirm(self):
-        # ---- 1. Parse the PO total ----
+        # ---- 1. PO total ----
         raw_total = self.total_entry.get().strip()
         try:
             total_amount = float(raw_total)
@@ -482,14 +574,16 @@ class ReceiveConfirmDialog(ctk.CTkToplevel):
             self.total_entry.focus_set()
             return
 
-        # ---- 2. Gather checked items + validate ----
+        # ---- 2. Gather + validate ----
         received = {}
         costs = {}
+        expiries = {}
 
         for product_id, var in self._check_vars.items():
             if not var.get():
                 continue
 
+            # ---- Total Pieces ----
             pieces_e = self._pieces_entries.get(product_id)
             if pieces_e is None:
                 continue
@@ -510,6 +604,7 @@ class ReceiveConfirmDialog(ctk.CTkToplevel):
             if pieces_val == 0:
                 continue
 
+            # ---- Cost / Unit ----
             cost_e = self._cost_entries.get(product_id)
             raw_cost = (cost_e.get() if cost_e else "0").strip() or "0"
             try:
@@ -524,8 +619,25 @@ class ReceiveConfirmDialog(ctk.CTkToplevel):
                 )
                 return
 
+            # ---- Expiration Date (optional, MM/DD/YYYY) ----
+            expiry_e = self._expiry_entries.get(product_id)
+            raw_expiry = (expiry_e.get() if expiry_e else "").strip()
+            db_expiry = None
+
+            if raw_expiry:
+                if not is_valid_ui_date(raw_expiry):
+                    messagebox.showerror(
+                        "Invalid Expiration Date",
+                        "Please use MM/DD/YYYY for the expiration date, "
+                        "or leave it blank.",
+                        parent=self,
+                    )
+                    return
+                db_expiry = ui_date_to_db(raw_expiry)
+
             received[product_id] = pieces_val
             costs[product_id] = cost_val
+            expiries[product_id] = db_expiry
 
         if not received:
             messagebox.showwarning(
@@ -538,6 +650,7 @@ class ReceiveConfirmDialog(ctk.CTkToplevel):
 
         self.received_quantities = received
         self.line_costs = costs
+        self.expiration_dates = expiries
         self.total_amount = total_amount
         self.confirmed = True
         self.destroy()
@@ -546,5 +659,6 @@ class ReceiveConfirmDialog(ctk.CTkToplevel):
         self.confirmed = False
         self.received_quantities = {}
         self.line_costs = {}
+        self.expiration_dates = {}
         self.total_amount = 0.0
         self.destroy()

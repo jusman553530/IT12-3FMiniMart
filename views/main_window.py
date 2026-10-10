@@ -4,7 +4,6 @@
 
 import customtkinter as ctk
 from tkinter import messagebox
-from database import close_connection
 
 from config import (
     APP_NAME, font, font_bold,
@@ -23,6 +22,7 @@ from views.purchase_view import PurchaseView
 from views.sales_view import SalesView
 from views.activity_log_view import ActivityLogView
 from views.user_management_view import UserManagementView
+
 
 class MainWindow(ctk.CTk):
 
@@ -98,10 +98,12 @@ class MainWindow(ctk.CTk):
         self._nav_button(sidebar, "inventory", "📦   Inventory", self._show_inventory)
         self._nav_button(sidebar, "sales",     "💰   Sales",     self._show_sales)
 
+        # ⚡ Staff can now also access Suppliers and Purchase Records.
+        self._nav_button(sidebar, "suppliers", "🏢   Suppliers",        self._show_suppliers)
+        self._nav_button(sidebar, "purchases", "📋   Purchase Records", self._show_purchases)
+
         # ---- Admin-only ----
         if AuthController.is_admin():
-            self._nav_button(sidebar, "suppliers", "🏢   Suppliers",        self._show_suppliers)
-            self._nav_button(sidebar, "purchases", "📋   Purchase Records", self._show_purchases)
             self._nav_button(sidebar, "users",     "👤   User Management",  self._show_users)
             self._nav_button(sidebar, "logs",      "📝   Activity Logs",    self._show_logs)
 
@@ -167,13 +169,11 @@ class MainWindow(ctk.CTk):
 
     def _navigate_by_key(self, key):
         """Used by dashboard shortcuts to jump to another view."""
-        # ---- Block admin-only shortcuts for staff ----
-        ADMIN_ONLY = {"suppliers", "purchases", "users", "logs"}
+        # ⚡ Only User Management and Activity Logs are admin-only now.
+        ADMIN_ONLY = {"users", "logs"}
         if key in ADMIN_ONLY and not AuthController.is_admin():
             return
 
-        # ---- Legacy dashboard shortcuts to "reports"/"transactions"
-        #      should now route to the Sales view (Reports tab for admin) ----
         if key in ("reports", "transactions"):
             key = "sales"
 
@@ -221,20 +221,22 @@ class MainWindow(ctk.CTk):
         SalesView(self.content, self.user).pack(fill="both", expand=True)
 
     # ─────────────────────────────────────────────
-    # ADMIN-ONLY HANDLERS
+    # SUPPLIERS + PURCHASES (staff + admin)
     # ─────────────────────────────────────────────
 
     def _show_suppliers(self):
-        if not AuthController.is_admin():
-            return
+        # ⚡ No admin check — staff allowed
         self._clear_content()
         SupplierView(self.content, self.user).pack(fill="both", expand=True)
 
     def _show_purchases(self):
-        if not AuthController.is_admin():
-            return
+        # ⚡ No admin check — staff allowed
         self._clear_content()
         PurchaseView(self.content, self.user).pack(fill="both", expand=True)
+
+    # ─────────────────────────────────────────────
+    # ADMIN-ONLY HANDLERS
+    # ─────────────────────────────────────────────
 
     def _show_users(self):
         if not AuthController.is_admin():
@@ -268,7 +270,3 @@ class MainWindow(ctk.CTk):
 
         from views.login_view import LoginView
         LoginView().mainloop()
-
-    def destroy(self):
-        close_connection()
-        super().destroy()

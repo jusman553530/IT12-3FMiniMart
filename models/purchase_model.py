@@ -32,13 +32,10 @@ def create_purchase(supplier_id, user_id, items, notes=""):
         {
           product_id: int,
           quantity:   int,
-          unit:       str,      # 'pc', 'pack', 'box', 'case', 'sack', 'kg', 'L'
+          unit:       str,
           pieces_per_unit: int | None,
           expiration_date: str | None
         }
-
-    Per-line cost tracking has been removed. purchases.total_cost
-    starts at 0 and is set later when the PO is received.
     """
     conn = get_connection()
     try:
@@ -73,23 +70,25 @@ def create_purchase(supplier_id, user_id, items, notes=""):
 
 
 def receive_purchase(purchase_id, user_id, received_quantities=None,
-                     product_ids=None, total_amount=None):
+                     product_ids=None, total_amount=None,
+                     line_costs=None):
     """
     Mark a PO as received (fully or partially), create batches, and
-    store the user-entered PO total.
+    store the user-entered PO total and per-line costs.
 
     Parameters
     ----------
     purchase_id : int
     user_id : int
     received_quantities : dict[int, int] | None
-        Maps product_id → received quantity (pieces).
-        If None, defaults to each line's ordered `quantity`.
+        product_id → received pieces. These go to inventory.
     product_ids : list[int] | None
-        Legacy: receive only these product_ids at their ordered qty.
-        Ignored if received_quantities is provided.
+        Legacy path — receive only these product_ids at ordered qty.
     total_amount : float | None
-        If provided, saves this to purchases.total_cost.
+        If provided, saves to purchases.total_cost.
+    line_costs : dict[int, float] | None
+        product_id → cost per unit (per box/pack). Saved to
+        purchase_items.cost and used as the batch cost_price.
 
     Returns
     -------
@@ -99,7 +98,6 @@ def receive_purchase(purchase_id, user_id, received_quantities=None,
     try:
         cur = conn.cursor()
 
-        # ---- 1. Load PO ----
         row = cur.execute(
             "SELECT status, supplier_id FROM purchases WHERE purchase_id = ?",
             (purchase_id,)
@@ -112,7 +110,6 @@ def receive_purchase(purchase_id, user_id, received_quantities=None,
 
         supplier_id = row["supplier_id"]
 
-        # ---- 2. Load all items ----
         all_items = cur.execute("""
             SELECT product_id, quantity, expiration_date, unit
             FROM purchase_items
@@ -122,7 +119,6 @@ def receive_purchase(purchase_id, user_id, received_quantities=None,
         if not all_items:
             return False, "Purchase has no items."
 
-        # ---- 3. Decide which items get received + their quantities ----
         if received_quantities is not None:
             items_to_receive = []
             for it in all_items:
@@ -148,14 +144,17 @@ def receive_purchase(purchase_id, user_id, received_quantities=None,
         if not items_to_receive:
             return False, "No items selected to receive."
 
-        # ---- 4. Create batches + record received quantity ----
-        # Batches are created with cost_price = 0 (no line cost tracking).
+        line_costs = line_costs or {}
+
         for item, qty in items_to_receive:
+            pid = item["product_id"]
+            unit_cost = float(line_costs.get(pid, 0) or 0)
+
             create_batch_cur(
                 cur,
-                product_id=item["product_id"],
+                product_id=pid,
                 quantity=qty,
-                cost_price=0,
+                cost_price=unit_cost,
                 expiration_date=item["expiration_date"],
                 supplier_id=supplier_id,
                 purchase_id=purchase_id,
@@ -163,11 +162,10 @@ def receive_purchase(purchase_id, user_id, received_quantities=None,
 
             cur.execute("""
                 UPDATE purchase_items
-                SET received_quantity = ?
+                SET received_quantity = ?, cost = ?
                 WHERE purchase_id = ? AND product_id = ?
-            """, (qty, purchase_id, item["product_id"]))
+            """, (qty, unit_cost, purchase_id, pid))
 
-        # ---- 5. Save the PO total (if provided) ----
         if total_amount is not None:
             cur.execute("""
                 UPDATE purchases
@@ -175,7 +173,6 @@ def receive_purchase(purchase_id, user_id, received_quantities=None,
                 WHERE purchase_id = ?
             """, (float(total_amount), purchase_id))
 
-        # ---- 6. Mark as Received if every line got some amount ----
         handled = cur.execute("""
             SELECT COUNT(*) AS c
             FROM purchase_items

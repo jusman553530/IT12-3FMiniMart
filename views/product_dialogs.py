@@ -3,13 +3,12 @@
 # ─────────────────────────────────────────────
 
 from datetime import datetime
-from PIL import Image
 import customtkinter as ctk
 from tkinter import messagebox
 
 from controllers.inventory_controller import InventoryController
 from controllers.supplier_controller import SupplierController
-from utils import prepare_dialog_screen, pick_image_file, save_product_image
+from utils import prepare_dialog_screen
 from config import (
     font, font_bold,
     BG_MAIN, BG_CARD, BG_INPUT, BG_ROW_ALT, BORDER,
@@ -33,17 +32,13 @@ class ProductDialog(ctk.CTkToplevel):
         self.product = product
         self.on_save = on_save
         self.title("Product")
-        self.geometry("520x660")
+        self.geometry("520x560")
         self.resizable(True, True)
-        self.minsize(480, 500)
+        self.minsize(480, 480)
         self.configure(fg_color=BG_MAIN)
 
         self.suppliers = SupplierController.list_suppliers()
         self.categories = InventoryController.list_categories()
-
-        self.new_image_source = None
-        self.current_image_path = (product["image_path"] if product else None)
-        self.preview_image = None
 
         self._build()
         prepare_dialog_screen(self, self.parent)
@@ -75,39 +70,11 @@ class ProductDialog(ctk.CTkToplevel):
                                       border_color=BORDER)
         card.pack(fill="both", expand=True, padx=14, pady=(0, 12))
 
-        # ---- Image row ----
-        img_row = ctk.CTkFrame(card, fg_color="transparent")
-        img_row.pack(fill="x", padx=12, pady=(10, 6))
-
-        self.preview_label = ctk.CTkLabel(img_row, text="No image",
-                                          width=90, height=90,
-                                          fg_color=BG_INPUT,
-                                          corner_radius=8,
-                                          font=font(10),
-                                          text_color=FG_MUTED)
-        self.preview_label.pack(side="left")
-
-        if p and p["image_path"]:
-            self._set_preview(p["image_path"])
-
-        btn_col = ctk.CTkFrame(img_row, fg_color="transparent")
-        btn_col.pack(side="left", padx=(10, 0), fill="y")
-
-        ctk.CTkButton(btn_col, text="Choose Image", width=120, height=30,
-                      corner_radius=6, font=font(11),
-                      fg_color=ACCENT, hover_color=ACCENT_HOVER,
-                      command=self._choose_image).pack(pady=(4, 4))
-        ctk.CTkButton(btn_col, text="Clear Image", width=120, height=30,
-                      corner_radius=6, font=font(11),
-                      fg_color=NEUTRAL, hover_color=NEUTRAL_HOVER,
-                      text_color=NEUTRAL_TEXT,
-                      command=self._clear_image).pack()
-
         # ---- Code (edit only) ----
         if is_edit:
             ctk.CTkLabel(card, text="CODE", anchor="w",
                          font=font_bold(10),
-                         text_color=FG_SECONDARY).pack(fill="x", padx=12, pady=(6, 3))
+                         text_color=FG_SECONDARY).pack(fill="x", padx=12, pady=(10, 3))
             code_e = ctk.CTkEntry(card, height=30, corner_radius=6,
                                   font=font(12), fg_color=BG_INPUT,
                                   border_color=BORDER, border_width=1)
@@ -145,36 +112,15 @@ class ProductDialog(ctk.CTkToplevel):
         self.size_e.pack(fill="x", padx=12)
         if p and p["size"]: self.size_e.insert(0, p["size"])
 
-        # ---- Price + Cost ----
-        price_row = ctk.CTkFrame(card, fg_color="transparent")
-        price_row.pack(fill="x", padx=12, pady=(6, 3))
-
-        price_col = ctk.CTkFrame(price_row, fg_color="transparent")
-        price_col.pack(side="left", fill="x", expand=True, padx=(0, 4))
-
-        ctk.CTkLabel(price_col, text="SELLING PRICE", anchor="w",
+        # ---- Selling price ----
+        ctk.CTkLabel(card, text="SELLING PRICE", anchor="w",
                      font=font_bold(10),
-                     text_color=FG_SECONDARY).pack(fill="x", pady=(0, 3))
-        self.price_e = ctk.CTkEntry(price_col, height=30, corner_radius=6,
+                     text_color=FG_SECONDARY).pack(fill="x", padx=12, pady=(6, 3))
+        self.price_e = ctk.CTkEntry(card, height=30, corner_radius=6,
                                     font=font(12), fg_color=BG_INPUT,
                                     border_color=BORDER, border_width=1)
-        self.price_e.pack(fill="x")
+        self.price_e.pack(fill="x", padx=12)
         if p: self.price_e.insert(0, str(p["price"]))
-
-        cost_col = ctk.CTkFrame(price_row, fg_color="transparent")
-        cost_col.pack(side="left", fill="x", expand=True)
-
-        ctk.CTkLabel(cost_col, text="COST PRICE", anchor="w",
-                     font=font_bold(10),
-                     text_color=FG_SECONDARY).pack(fill="x", pady=(0, 3))
-        self.cost_e = ctk.CTkEntry(cost_col, height=30, corner_radius=6,
-                                   font=font(12), fg_color=BG_INPUT,
-                                   border_color=BORDER, border_width=1)
-        self.cost_e.pack(fill="x")
-        if p and p["cost_price"] is not None:
-            self.cost_e.insert(0, str(p["cost_price"]))
-        else:
-            self.cost_e.insert(0, "0")
 
         # ---- Low stock ----
         ctk.CTkLabel(card, text="LOW STOCK LEVEL", anchor="w",
@@ -294,29 +240,6 @@ class ProductDialog(ctk.CTkToplevel):
                       fg_color=ACCENT, hover_color=ACCENT_HOVER,
                       command=self._save).pack(fill="x", padx=12, pady=(14, 12))
 
-    def _choose_image(self):
-        path = pick_image_file()
-        if not path:
-            return
-        self.new_image_source = path
-        self._set_preview(path)
-
-    def _clear_image(self):
-        self.new_image_source = None
-        self.current_image_path = None
-        self.preview_image = None
-        self.preview_label.configure(image=None, text="No image")
-
-    def _set_preview(self, path):
-        try:
-            img = Image.open(path)
-            self.preview_image = ctk.CTkImage(
-                light_image=img, dark_image=img, size=(90, 90)
-            )
-            self.preview_label.configure(image=self.preview_image, text="")
-        except Exception:
-            self.preview_label.configure(image=None, text="Invalid image")
-
     def _quick_add_category(self):
         prompt = ctk.CTkToplevel(self)
         prompt.title("Quick Add Category")
@@ -368,12 +291,11 @@ class ProductDialog(ctk.CTkToplevel):
         try:
             price = float(self.price_e.get())
             low = int(self.low_e.get())
-            cost = float(self.cost_e.get() or 0)
         except ValueError:
             messagebox.showerror("Error", "Invalid numeric input.")
             return
 
-        if price < 0 or cost < 0 or low < 0:
+        if price < 0 or low < 0:
             messagebox.showerror("Error", "Values cannot be negative.")
             return
 
@@ -419,22 +341,19 @@ class ProductDialog(ctk.CTkToplevel):
             messagebox.showerror("Error", "Please select a supplier.")
             return
 
-        if self.new_image_source:
-            self.current_image_path = save_product_image(self.new_image_source)
-
         if self.product:
             ok, msg = InventoryController.update(
                 self.user, self.product["product_id"],
                 name, price, low, supplier_id, category_id,
-                self.current_image_path,
-                brand=brand, size=size, unit=unit, cost_price=cost,
+                None,          # image_path
+                brand=brand, size=size, unit=unit, cost_price=0.0,
             )
         else:
             ok, msg = InventoryController.add(
                 self.user, name, price, initial_stock, low,
                 supplier_id, category_id,
-                self.current_image_path,
-                brand=brand, size=size, unit=unit, cost_price=cost,
+                None,          # image_path
+                brand=brand, size=size, unit=unit, cost_price=0.0,
                 expiration_date=expiration_date,
             )
 
@@ -499,16 +418,6 @@ class RestockDialog(ctk.CTkToplevel):
         self.qty_e.focus_set()
         self.qty_e.select_range(0, "end")
 
-        ctk.CTkLabel(self, text="COST PRICE (optional)",
-                     font=font_bold(10),
-                     text_color=FG_SECONDARY).pack(pady=(10, 4))
-        self.cost_e = ctk.CTkEntry(self, width=220, height=36,
-                                   corner_radius=8, font=font(13),
-                                   fg_color=BG_INPUT, border_color=BORDER,
-                                   border_width=1, justify="center",
-                                   placeholder_text="leave blank to use current")
-        self.cost_e.pack()
-
         ctk.CTkLabel(self, text="EXPIRATION DATE  (optional, YYYY-MM-DD)",
                      font=font_bold(10),
                      text_color=FG_SECONDARY).pack(pady=(10, 4))
@@ -534,17 +443,6 @@ class RestockDialog(ctk.CTkToplevel):
             messagebox.showerror("Error", "Enter a valid positive number.")
             return
 
-        cost_raw = self.cost_e.get().strip()
-        cost = None
-        if cost_raw:
-            try:
-                cost = float(cost_raw)
-                if cost < 0:
-                    raise ValueError
-            except ValueError:
-                messagebox.showerror("Error", "Cost must be a non-negative number.")
-                return
-
         exp_date = self.exp_e.get().strip() or None
         if exp_date:
             try:
@@ -559,7 +457,7 @@ class RestockDialog(ctk.CTkToplevel):
         ok, msg = InventoryController.restock(
             self.user, self.product["product_id"],
             quantity=qty,
-            cost_price=cost,
+            cost_price=None,
             expiration_date=exp_date,
         )
         if ok:
@@ -635,9 +533,6 @@ class BatchesDialog(ctk.CTkToplevel):
             row = ctk.CTkFrame(self.list_frame, fg_color=bg, corner_radius=6)
             row.pack(fill="x", pady=2)
 
-            # ═════════════════════════════════════════
-            # ACTION BUTTONS FIRST (packed right, gets priority width)
-            # ═════════════════════════════════════════
             actions = ctk.CTkFrame(row, fg_color="transparent",
                                    width=170, height=26)
             actions.pack(side="right", padx=(4, 6))
@@ -658,9 +553,6 @@ class BatchesDialog(ctk.CTkToplevel):
                           command=lambda bt=b: self._edit(bt)
                           ).pack(side="left")
 
-            # ═════════════════════════════════════════
-            # DATA COLUMNS (packed left, fills remaining space)
-            # ═════════════════════════════════════════
             ctk.CTkLabel(row, text=b["batch_no"] or "-",
                          width=170, anchor="w",
                          font=font_bold(11),
@@ -772,7 +664,6 @@ class EditBatchDialog(ctk.CTkToplevel):
                             border_color=BORDER)
         card.pack(fill="x", padx=20, pady=(0, 10))
 
-        # ---- Quantity ----
         ctk.CTkLabel(card, text="QUANTITY", anchor="w",
                      font=font_bold(10),
                      text_color=FG_SECONDARY).pack(fill="x", padx=14, pady=(14, 4))
@@ -782,7 +673,6 @@ class EditBatchDialog(ctk.CTkToplevel):
         self.qty_e.pack(fill="x", padx=14)
         self.qty_e.insert(0, str(b["quantity"]))
 
-        # ---- Cost price ----
         ctk.CTkLabel(card, text="COST PRICE (₱)", anchor="w",
                      font=font_bold(10),
                      text_color=FG_SECONDARY).pack(fill="x", padx=14, pady=(10, 4))
@@ -792,7 +682,6 @@ class EditBatchDialog(ctk.CTkToplevel):
         self.cost_e.pack(fill="x", padx=14)
         self.cost_e.insert(0, str(b["cost_price"] or 0))
 
-        # ---- Expiration date ----
         ctk.CTkLabel(card, text="EXPIRATION DATE  (YYYY-MM-DD, blank = none)",
                      anchor="w",
                      font=font_bold(10),
@@ -805,7 +694,6 @@ class EditBatchDialog(ctk.CTkToplevel):
         if b["expiration_date"]:
             self.exp_e.insert(0, b["expiration_date"])
 
-        # ---- Buttons ----
         btn_row = ctk.CTkFrame(self, fg_color="transparent")
         btn_row.pack(pady=(6, 16))
 

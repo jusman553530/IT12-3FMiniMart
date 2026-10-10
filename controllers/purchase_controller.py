@@ -48,7 +48,8 @@ class PurchaseController:
 
     @staticmethod
     def receive(user, purchase_id, product_ids=None,
-                received_quantities=None):
+                received_quantities=None, total_amount=None,
+                line_costs=None):
         """
         Mark a purchase order as Received and add its items to inventory.
 
@@ -57,43 +58,15 @@ class PurchaseController:
         user : dict
         purchase_id : int
         product_ids : list[int] | None
-            Legacy: receive only these products at their ordered qty.
+            Legacy: receive only these product_ids at their ordered qty.
         received_quantities : dict[int, int] | None
-            Preferred: {product_id: pieces_received}. Takes priority
-            over product_ids when provided.
+            {product_id: pieces_received} — what goes to inventory.
+        total_amount : float | None
+            Overwrites purchases.total_cost.
+        line_costs : dict[int, float] | None
+            {product_id: cost_per_unit} — saved to purchase_items.cost
+            and used as the batch's cost_price.
         """
-        ok, msg = receive_purchase(
-            purchase_id,
-            user["user_id"],
-            received_quantities=received_quantities,
-            product_ids=product_ids,
-        )
-        if ok:
-            if received_quantities:
-                n = len(received_quantities)
-            elif product_ids:
-                n = len(product_ids)
-            else:
-                n = 0
-
-            detail = f"PO #{purchase_id}"
-            if n:
-                detail += f" | Received {n} item(s)"
-
-            log_action(user["user_id"], "RECEIVE_PURCHASE", detail)
-        return ok, msg
-
-    @staticmethod
-    def cancel(user, purchase_id):
-        ok, msg = cancel_purchase(purchase_id)
-        if ok:
-            log_action(user["user_id"], "CANCEL_PURCHASE", f"PO #{purchase_id}")
-        return ok, msg
-
-    @staticmethod
-    def receive(user, purchase_id, product_ids=None,
-                received_quantities=None, total_amount=None,
-                line_costs=None):
         ok, msg = receive_purchase(
             purchase_id,
             user["user_id"],
@@ -117,4 +90,11 @@ class PurchaseController:
                 detail += f" | Total ₱{float(total_amount):.2f}"
 
             log_action(user["user_id"], "RECEIVE_PURCHASE", detail)
+        return ok, msg
+
+    @staticmethod
+    def cancel(user, purchase_id):
+        ok, msg = cancel_purchase(purchase_id)
+        if ok:
+            log_action(user["user_id"], "CANCEL_PURCHASE", f"PO #{purchase_id}")
         return ok, msg
