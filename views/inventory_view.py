@@ -773,6 +773,14 @@ class InventoryView(ctk.CTkFrame):
     # EXPORT PDF
     # ─────────────────────────────────────────────
 
+    # ─────────────────────────────────────────────
+    # EXPORT PDF
+    # ─────────────────────────────────────────────
+
+    # ─────────────────────────────────────────────
+    # EXPORT PDF
+    # ─────────────────────────────────────────────
+
     def _export_pdf(self):
         if not AuthController.is_admin():
             return
@@ -810,3 +818,14 @@ class InventoryView(ctk.CTkFrame):
             filters=filters,
             exporter_name=exporter,
         )
+
+        # ⚡ Log the export
+        try:
+            from models.activity_log_model import log_action
+            log_action(
+                self.user["user_id"],
+                "EXPORT_PDF",
+                f"Inventory Report | {len(products)} product(s)",
+            )
+        except Exception as e:
+            print(f"[EXPORT LOG] Failed: {e}")

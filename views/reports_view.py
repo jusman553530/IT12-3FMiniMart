@@ -359,6 +359,26 @@ class ReportsTab(ctk.CTkFrame):
         if ok:
             messagebox.showinfo("Export Complete",
                                 f"PDF saved to:\n{result}")
+
+            # ⚡ Log the export
+            try:
+                from models.activity_log_model import log_action
+                # Build a short range label for the details string
+                d_from = ui_date_to_db(self.date_from) or "all"
+                d_to = ui_date_to_db(self.date_to) or "all"
+                if d_from == d_to:
+                    range_label = d_from
+                else:
+                    range_label = f"{d_from} to {d_to}"
+
+                log_action(
+                    self.user["user_id"],
+                    "EXPORT_PDF",
+                    f"Sales Report | {range_label}",
+                )
+            except Exception as e:
+                print(f"[EXPORT LOG] Failed: {e}")
+
         elif result != "Cancelled.":
             messagebox.showerror("Export Failed", result)
 

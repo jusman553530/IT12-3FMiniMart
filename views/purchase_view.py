@@ -610,7 +610,8 @@ class PurchaseView(ctk.CTkFrame):
         PurchaseOrderDialog(self.winfo_toplevel(), self.user, on_save=self._load)
 
     def _view_dialog(self, purchase):
-        PurchaseDetailDialog(self.winfo_toplevel(), purchase)
+        # ⚡ Pass user so the detail dialog can log PDF exports
+        PurchaseDetailDialog(self.winfo_toplevel(), purchase, user=self.user)
 
 
 # ─────────────────────────────────────────────
@@ -619,10 +620,11 @@ class PurchaseView(ctk.CTkFrame):
 
 class PurchaseDetailDialog(ctk.CTkToplevel):
 
-    def __init__(self, parent, purchase):
+    def __init__(self, parent, purchase, user=None):
         super().__init__(parent)
         self.parent = parent
         self.purchase = purchase
+        self.user = user
         self.title(f"PO #{purchase['purchase_id']}")
         self.geometry("740x660")
         self.minsize(680, 580)
@@ -775,5 +777,19 @@ class PurchaseDetailDialog(ctk.CTkToplevel):
         if ok:
             messagebox.showinfo("Export Complete",
                                 f"PDF saved to:\n{result}")
+
+            # ⚡ Log the export
+            try:
+                from models.activity_log_model import log_action
+                user_id = (self.user["user_id"]
+                           if isinstance(self.user, dict) else 1)
+                log_action(
+                    user_id,
+                    "EXPORT_PDF",
+                    f"PO #{p['purchase_id']} PDF",
+                )
+            except Exception as e:
+                print(f"[EXPORT LOG] Failed: {e}")
+
         elif result != "Cancelled.":
             messagebox.showerror("Export Failed", result)

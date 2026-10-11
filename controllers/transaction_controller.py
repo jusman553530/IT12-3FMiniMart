@@ -6,6 +6,7 @@ from models.transaction_model import (
     create_transaction, get_transactions_filtered,
     get_transaction_items, get_sales_summary,
 )
+from models.activity_log_model import log_action
 
 
 class TransactionController:
@@ -17,9 +18,25 @@ class TransactionController:
     @staticmethod
     def create(user_id, cart, payment_method, amount_paid,
                gcash_reference=None):
-        return create_transaction(
+        ok, result, change = create_transaction(
             user_id, cart, payment_method, amount_paid, gcash_reference
         )
+
+        # ⚡ Log the sale on success
+        if ok:
+            try:
+                total = sum(item["price"] * item["quantity"] for item in cart)
+                item_count = sum(item["quantity"] for item in cart)
+                log_action(
+                    user_id,
+                    "SALE",
+                    f"Txn #{result} | {item_count} item(s) | "
+                    f"₱{total:.2f} | {payment_method}",
+                )
+            except Exception as e:
+                print(f"[SALE LOG] Failed: {e}")
+
+        return ok, result, change
 
     # ─────────────────────────────────────────────
     # READ
