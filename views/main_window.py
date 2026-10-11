@@ -98,7 +98,7 @@ class MainWindow(ctk.CTk):
         self._nav_button(sidebar, "inventory", "📦   Inventory", self._show_inventory)
         self._nav_button(sidebar, "sales",     "💰   Sales",     self._show_sales)
 
-        # ⚡ Staff can now also access Suppliers and Purchase Records.
+        # Staff can also access Suppliers and Purchase Records.
         self._nav_button(sidebar, "suppliers", "🏢   Suppliers",        self._show_suppliers)
         self._nav_button(sidebar, "purchases", "📋   Purchase Records", self._show_purchases)
 
@@ -167,15 +167,24 @@ class MainWindow(ctk.CTk):
 
         command()
 
-    def _navigate_by_key(self, key):
+    # ⚡ Accepts an optional initial_filter and forwards it to the
+    #    inventory handler when the target is "inventory".
+    def _navigate_by_key(self, key, initial_filter=None):
         """Used by dashboard shortcuts to jump to another view."""
-        # ⚡ Only User Management and Activity Logs are admin-only now.
         ADMIN_ONLY = {"users", "logs"}
         if key in ADMIN_ONLY and not AuthController.is_admin():
             return
 
         if key in ("reports", "transactions"):
             key = "sales"
+
+        # Inventory accepts a filter; other handlers ignore it.
+        if key == "inventory":
+            self._navigate(
+                key,
+                lambda: self._show_inventory(initial_filter=initial_filter),
+            )
+            return
 
         mapping = {
             "dashboard": self._show_dashboard,
@@ -212,9 +221,14 @@ class MainWindow(ctk.CTk):
         self._clear_content()
         POSView(self.content, self.user).pack(fill="both", expand=True)
 
-    def _show_inventory(self):
+    # ⚡ Accepts an optional initial_filter so the dashboard's Low Stock /
+    #    Expiring Soon KPIs can open Inventory with a filter pre-applied.
+    def _show_inventory(self, initial_filter=None):
         self._clear_content()
-        InventoryView(self.content, self.user).pack(fill="both", expand=True)
+        InventoryView(self.content, self.user,
+                      initial_filter=initial_filter).pack(
+            fill="both", expand=True
+        )
 
     def _show_sales(self):
         self._clear_content()
@@ -225,12 +239,10 @@ class MainWindow(ctk.CTk):
     # ─────────────────────────────────────────────
 
     def _show_suppliers(self):
-        # ⚡ No admin check — staff allowed
         self._clear_content()
         SupplierView(self.content, self.user).pack(fill="both", expand=True)
 
     def _show_purchases(self):
-        # ⚡ No admin check — staff allowed
         self._clear_content()
         PurchaseView(self.content, self.user).pack(fill="both", expand=True)
 

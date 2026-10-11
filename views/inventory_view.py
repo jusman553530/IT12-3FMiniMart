@@ -28,7 +28,14 @@ class InventoryView(ctk.CTkFrame):
 
     PAGE_SIZE = 10
 
-    def __init__(self, parent, user):
+    # ⚡ Filter modes
+    #   "all"      — every non-archived product
+    #   "low"      — stock_qty <= low_stock_level
+    #   "expiring" — has at least one batch expiring within 30 days
+    #                (expired batches count too)
+    EXPIRING_WINDOW_DAYS = 30
+
+    def __init__(self, parent, user, initial_filter=None):
         super().__init__(parent, fg_color=BG_MAIN)
         self.user = user
         self.categories = InventoryController.list_categories()
@@ -36,7 +43,12 @@ class InventoryView(ctk.CTkFrame):
         self.show_archived = False
         self.search_query = ""
 
-        self.filter_mode = "all"
+        # ⚡ Accept an initial filter from the caller (dashboard KPI click)
+        if initial_filter in ("all", "low", "expiring"):
+            self.filter_mode = initial_filter
+        else:
+            self.filter_mode = "all"
+
         self.date_from = ""
         self.date_to = ""
         self.active_range_button = None
@@ -46,6 +58,7 @@ class InventoryView(ctk.CTkFrame):
         self.total_pages = 1
 
         self._build()
+        self._sync_filter_buttons()   # ⚡ reflect initial filter in the UI
         self._load()
 
     # ─────────────────────────────────────────────
@@ -53,7 +66,6 @@ class InventoryView(ctk.CTkFrame):
     # ─────────────────────────────────────────────
 
     def _build(self):
-        # ---- Header ----
         header_frame = ctk.CTkFrame(self, fg_color="transparent")
         header_frame.pack(fill="x", padx=20, pady=(20, 10))
 
@@ -149,7 +161,7 @@ class InventoryView(ctk.CTkFrame):
                         font=font(12),
                         command=self._toggle_archived).pack(side="left")
 
-        # Row 2
+        # Row 2 — filter buttons
         row2 = ctk.CTkFrame(filter_card, fg_color="transparent")
         row2.pack(fill="x", padx=16, pady=(0, 6))
 
@@ -167,15 +179,25 @@ class InventoryView(ctk.CTkFrame):
         self.btn_all.pack(side="left", padx=(0, 6))
 
         self.btn_low = ctk.CTkButton(
-            row2, text="Low Stock Only", width=120, height=32,
+            row2, text="Low Stock Only", width=130, height=32,
             corner_radius=8, font=font(11),
             fg_color=NEUTRAL, hover_color=NEUTRAL_HOVER,
             text_color=NEUTRAL_TEXT,
             command=lambda: self._set_filter_mode("low"),
         )
-        self.btn_low.pack(side="left")
+        self.btn_low.pack(side="left", padx=(0, 6))
 
-        # Row 3
+        # ⚡ New: expiring-soon filter
+        self.btn_expiring = ctk.CTkButton(
+            row2, text="Expiring Soon Only", width=150, height=32,
+            corner_radius=8, font=font(11),
+            fg_color=NEUTRAL, hover_color=NEUTRAL_HOVER,
+            text_color=NEUTRAL_TEXT,
+            command=lambda: self._set_filter_mode("expiring"),
+        )
+        self.btn_expiring.pack(side="left")
+
+        # Row 3 — date range
         row3 = ctk.CTkFrame(filter_card, fg_color="transparent")
         row3.pack(fill="x", padx=16, pady=(0, 14))
 
@@ -326,15 +348,20 @@ class InventoryView(ctk.CTkFrame):
     def _set_filter_mode(self, mode):
         self.filter_mode = mode
         self.current_page = 1
-
-        if mode == "low":
-            self.btn_low.configure(fg_color=ACCENT, text_color="#FFFFFF")
-            self.btn_all.configure(fg_color=NEUTRAL, text_color=NEUTRAL_TEXT)
-        else:
-            self.btn_all.configure(fg_color=ACCENT, text_color="#FFFFFF")
-            self.btn_low.configure(fg_color=NEUTRAL, text_color=NEUTRAL_TEXT)
-
+        self._sync_filter_buttons()
         self._load()
+
+    def _sync_filter_buttons(self):
+        """Highlight whichever filter button matches self.filter_mode."""
+        def style(btn, active):
+            if active:
+                btn.configure(fg_color=ACCENT, text_color="#FFFFFF")
+            else:
+                btn.configure(fg_color=NEUTRAL, text_color=NEUTRAL_TEXT)
+
+        style(self.btn_all, self.filter_mode == "all")
+        style(self.btn_low, self.filter_mode == "low")
+        style(self.btn_expiring, self.filter_mode == "expiring")
 
     def _on_category_change(self, choice):
         if choice == "All Categories":
@@ -431,6 +458,8 @@ class InventoryView(ctk.CTkFrame):
     def _load(self):
         if self.filter_mode == "low":
             products = InventoryController.list_low_stock()
+        elif self.filter_mode == "expiring":
+            products = self._products_expiring_soon()
         else:
             products = InventoryController.list_by_category(
                 self.selected_category_id,
@@ -441,6 +470,43 @@ class InventoryView(ctk.CTkFrame):
             products = [p for p in products if self._matches_search(p)]
 
         self._render(products)
+
+    # ⚡ Reduce expiring batches to a unique list of products, then
+    #    hydrate each with stock_qty / low_stock_level / category_name /
+    #    earliest_expiration so the row renderer works unchanged.
+    def _products_expiring_soon(self):
+        try:
+            batches = InventoryController.list_expiring_soon(
+                days=self.EXPIRING_WINDOW_DAYS
+            )
+            expired = InventoryController.list_expired_batches()
+        except Exception as e:
+            print(f"[Inventory] expiring-soon fetch failed: {e}")
+            return []
+
+        # Union of expiring and expired, keyed by product_id.
+        by_product = {}
+        for b in list(expired) + list(batches):
+            pid = b.get("product_id")
+            if pid is None:
+                continue
+            if pid not in by_product:
+                by_product[pid] = b
+
+        # Pull the full product records so we get stock_qty etc.
+        all_products = InventoryController.list_products()
+        id_to_product = {p["product_id"]: p for p in all_products}
+
+        result = []
+        for pid in by_product.keys():
+            p = id_to_product.get(pid)
+            if p:
+                result.append(p)
+
+        result.sort(key=lambda p: (
+            p["earliest_expiration"] or "9999-99-99"
+        ))
+        return result
 
     def _matches_search(self, p):
         q = self.search_query
@@ -501,7 +567,7 @@ class InventoryView(ctk.CTkFrame):
                          text_color=FG_SECONDARY).pack(side="left", padx=3)
 
         if not page_products:
-            if self.search_query or self.filter_mode == "low":
+            if self.search_query or self.filter_mode != "all":
                 msg = "No products match your filters."
             else:
                 msg = "No products to show."
@@ -713,6 +779,8 @@ class InventoryView(ctk.CTkFrame):
 
         if self.filter_mode == "low":
             products = InventoryController.list_low_stock()
+        elif self.filter_mode == "expiring":
+            products = self._products_expiring_soon()
         else:
             products = InventoryController.list_by_category(
                 self.selected_category_id,
@@ -730,6 +798,7 @@ class InventoryView(ctk.CTkFrame):
             "date_to":       ui_date_to_db(self.date_to),
             "show_archived": self.show_archived,
             "low_only":      self.filter_mode == "low",
+            "expiring_only": self.filter_mode == "expiring",
             "search":        self.search_query or None,
         }
 

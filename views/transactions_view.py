@@ -5,6 +5,7 @@
 from datetime import datetime, timedelta
 import customtkinter as ctk
 from tkinter import messagebox
+from views.transaction_dialogs import TransactionDetailDialog
 
 from controllers.transaction_controller import TransactionController
 from views.date_picker import DatePickerField
@@ -564,8 +565,9 @@ class TransactionsTab(ctk.CTkFrame):
     # ─────────────────────────────────────────────
 
     def _view_transaction(self, txn):
-        TransactionDetailDialog(self.winfo_toplevel(), txn)
-
+        dlg = TransactionDetailDialog.get_shared(self.winfo_toplevel())
+        dlg.load_transaction(txn)
+        dlg.deiconify()
 
 # ─────────────────────────────────────────────
 # TRANSACTION DETAIL DIALOG

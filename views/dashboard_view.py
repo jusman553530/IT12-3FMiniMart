@@ -8,6 +8,9 @@ import customtkinter as ctk
 from controllers.dashboard_controller import DashboardController
 from controllers.inventory_controller import InventoryController
 from controllers.auth_controller import AuthController
+from controllers.transaction_controller import TransactionController
+from views.transaction_dialogs import TransactionDetailDialog
+from utils import center_on_parent
 from config import (
     font, font_bold,
     BG_MAIN, BG_CARD, BG_INPUT, BG_ROW_ALT, BORDER,
@@ -33,6 +36,12 @@ class DashboardView(ctk.CTkFrame):
         self.expiring_page = 1
         self.expiring_total_pages = 1
 
+        # Snapshot of the last stats fetch
+        self._stats = {}
+
+        # ⚡ Reusable Today's Sales popup (created lazily on first click)
+        self._sales_dialog = None
+
         self._build()
         self._load()
 
@@ -41,7 +50,6 @@ class DashboardView(ctk.CTkFrame):
     # ─────────────────────────────────────────────
 
     def _build(self):
-        # ---- Header ----
         header_frame = ctk.CTkFrame(self, fg_color="transparent")
         header_frame.pack(fill="x", padx=20, pady=(20, 10))
 
@@ -68,19 +76,19 @@ class DashboardView(ctk.CTkFrame):
 
         self.sales_card = self._make_kpi_card(
             kpi_row, "TODAY'S SALES", "₱0.00", ACCENT,
-            command=self._go_to_sales,
+            command=self._on_sales_click,
         )
         self.txn_card = self._make_kpi_card(
             kpi_row, "TRANSACTIONS", "0", FG_PRIMARY,
-            command=self._go_to_sales,
+            command=self._go_to_transactions,
         )
         self.lowstock_card = self._make_kpi_card(
             kpi_row, "LOW STOCK", "0", "#D97706",
-            command=self._go_to_inventory,
+            command=self._go_to_inventory_low,
         )
         self.expiring_card = self._make_kpi_card(
             kpi_row, "EXPIRING SOON", "0", "#D97706",
-            command=self._go_to_inventory,
+            command=self._go_to_inventory_expiring,
         )
 
         # ═════════════════════════════════════════
@@ -90,7 +98,6 @@ class DashboardView(ctk.CTkFrame):
         body = ctk.CTkFrame(self, fg_color="transparent")
         body.pack(fill="both", expand=True, padx=20, pady=(0, 20))
 
-        # ---- LEFT: Expiring in 30 Days ----
         expiring_panel = ctk.CTkFrame(body, fg_color=BG_CARD,
                                       corner_radius=12,
                                       border_width=1,
@@ -111,7 +118,7 @@ class DashboardView(ctk.CTkFrame):
                       font=font_bold(11),
                       fg_color=NEUTRAL, hover_color=NEUTRAL_HOVER,
                       text_color=NEUTRAL_TEXT,
-                      command=self._go_to_inventory
+                      command=self._go_to_inventory_expiring
                       ).pack(side="right")
 
         self.expiring_frame = ctk.CTkScrollableFrame(expiring_panel,
@@ -120,7 +127,6 @@ class DashboardView(ctk.CTkFrame):
 
         self.expiring_pager = self._make_pager(expiring_panel, "expiring")
 
-        # ---- RIGHT: Low Stock Alerts ----
         right = ctk.CTkFrame(body, fg_color=BG_CARD,
                              corner_radius=12,
                              border_width=1,
@@ -141,7 +147,7 @@ class DashboardView(ctk.CTkFrame):
                       font=font_bold(11),
                       fg_color=NEUTRAL, hover_color=NEUTRAL_HOVER,
                       text_color=NEUTRAL_TEXT,
-                      command=self._go_to_inventory
+                      command=self._go_to_inventory_low
                       ).pack(side="right")
 
         self.lowstock_frame = ctk.CTkScrollableFrame(right, fg_color="transparent")
@@ -168,14 +174,15 @@ class DashboardView(ctk.CTkFrame):
         label_widget = ctk.CTkLabel(inner, text=label,
                                     font=font_bold(10),
                                     text_color=FG_SECONDARY,
-                                    anchor="w")
-        label_widget.pack(fill="x")
+                                    anchor="nw")
+        label_widget.pack(fill="x", anchor="nw")
 
         value_label = ctk.CTkLabel(inner, text=value,
                                    font=font_bold(24),
                                    text_color=value_color,
-                                   anchor="w")
-        value_label.pack(fill="x", pady=(4, 0))
+                                   anchor="se",
+                                   justify="right")
+        value_label.pack(side="bottom", anchor="e", fill="x")
 
         for w in (card, inner, label_widget, value_label):
             w.bind("<Button-1>", lambda e: command())
@@ -243,13 +250,29 @@ class DashboardView(ctk.CTkFrame):
     # NAVIGATION
     # ─────────────────────────────────────────────
 
-    def _go_to_sales(self):
+    def _on_sales_click(self):
+        # ⚡ Reuse one Today's Sales popup for the whole session
+        if self._sales_dialog is None or \
+           not self._sales_dialog.winfo_exists():
+            self._sales_dialog = TodaySalesDialog(
+                parent=self.winfo_toplevel(),
+                stats=self._stats,
+            )
+        else:
+            self._sales_dialog.load(stats=self._stats)
+        self._sales_dialog.deiconify()
+
+    def _go_to_transactions(self):
         if callable(self.on_navigate):
             self.on_navigate("sales")
 
-    def _go_to_inventory(self):
+    def _go_to_inventory_low(self):
         if callable(self.on_navigate):
-            self.on_navigate("inventory")
+            self.on_navigate("inventory", initial_filter="low")
+
+    def _go_to_inventory_expiring(self):
+        if callable(self.on_navigate):
+            self.on_navigate("inventory", initial_filter="expiring")
 
     # ─────────────────────────────────────────────
     # LOAD
@@ -263,6 +286,8 @@ class DashboardView(ctk.CTkFrame):
             print(f"[Dashboard] get_stats failed: {e}")
             traceback.print_exc()
             stats = {}
+
+        self._stats = stats or {}
 
         self.sales_card.configure(
             text=f"₱{stats.get('total_sales_today', 0):,.2f}"
@@ -287,6 +312,7 @@ class DashboardView(ctk.CTkFrame):
 
         self._render_expiring()
         self._render_low_stock()
+
     # ─────────────────────────────────────────────
     # EXPIRING SOON
     # ─────────────────────────────────────────────
@@ -295,7 +321,6 @@ class DashboardView(ctk.CTkFrame):
         for w in self.expiring_frame.winfo_children():
             w.destroy()
 
-        # ---- Fetch expiring + expired (with fallbacks) ----
         rows = []
         expired = []
 
@@ -309,7 +334,6 @@ class DashboardView(ctk.CTkFrame):
         except Exception as e:
             print(f"[Dashboard] list_expired_batches failed: {e}")
 
-        # ---- Combine: expired first, then soon-expiring ----
         seen_keys = set()
         combined = []
 
@@ -344,7 +368,6 @@ class DashboardView(ctk.CTkFrame):
             self._update_pager(self.expiring_pager, 1, 1)
             return
 
-        # ---- Header ----
         header = ctk.CTkFrame(self.expiring_frame, fg_color="transparent")
         header.pack(fill="x", pady=(4, 8))
 
@@ -366,7 +389,6 @@ class DashboardView(ctk.CTkFrame):
             row = ctk.CTkFrame(self.expiring_frame, fg_color=bg, corner_radius=6)
             row.pack(fill="x", pady=2)
 
-            # ---- Product name ----
             display = " ".join(
                 part for part in (b.get("brand"), b.get("product_name"),
                                   b.get("size"))
@@ -447,7 +469,6 @@ class DashboardView(ctk.CTkFrame):
             self._update_pager(self.lowstock_pager, 1, 1)
             return
 
-        # ---- Header ----
         header = ctk.CTkFrame(self.lowstock_frame, fg_color="transparent")
         header.pack(fill="x", pady=(4, 8))
 
@@ -526,3 +547,229 @@ class DashboardView(ctk.CTkFrame):
             pager["next"].configure(state="normal",
                                     fg_color=NEUTRAL,
                                     text_color=NEUTRAL_TEXT)
+
+
+# ─────────────────────────────────────────────
+# TODAY'S SALES POPUP (transaction list, reusable, non-modal)
+# ─────────────────────────────────────────────
+# ─────────────────────────────────────────────
+# TODAY'S SALES POPUP (transaction list, reusable, non-modal)
+# ─────────────────────────────────────────────
+
+class TodaySalesDialog(ctk.CTkToplevel):
+    """
+    Non-modal popup listing today's transactions.
+    Each row has a View button that opens the shared TransactionDetailDialog.
+
+    Reusable: closing hides it (withdraw). Calling load() rebuilds the
+    list in place. The instance survives across KPI clicks.
+
+    Windows z-order: uses _pop_to_front from views.transaction_dialogs
+    to force itself in front of the main window after being shown.
+    """
+
+    def __init__(self, parent, stats):
+        super().__init__(parent)
+        self.parent = parent
+
+        self.title("Today's Sales")
+        self.geometry("900x560")
+        self.minsize(820, 500)
+        self.resizable(True, True)
+        self.configure(fg_color=BG_MAIN)
+
+        # Override close so we hide instead of destroy
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+
+        # Container that gets rebuilt on each load()
+        self._container = ctk.CTkFrame(self, fg_color="transparent")
+        self._container.pack(fill="both", expand=True)
+
+        self._stats = {}
+        self.load(stats=stats)
+
+    # ─────────────────────────────────────────────
+    # PUBLIC API
+    # ─────────────────────────────────────────────
+
+    def load(self, stats):
+        """Rebuild the popup with fresh data."""
+        self._stats = stats or {}
+        self._rebuild()
+
+        try:
+            self.update_idletasks()
+            center_on_parent(self, self.parent)
+        except Exception:
+            pass
+
+        # ⚡ Force to front
+        try:
+            from views.transaction_dialogs import _pop_to_front
+            _pop_to_front(self)
+        except Exception:
+            try:
+                self.lift()
+                self.focus_force()
+            except Exception:
+                pass
+
+    def _on_close(self):
+        # ⚡ Release any stale grab, then hide — reuse on next KPI click
+        try:
+            self.grab_release()
+        except Exception:
+            pass
+        try:
+            self.withdraw()
+        except Exception:
+            pass
+
+    # ─────────────────────────────────────────────
+    # REBUILD
+    # ─────────────────────────────────────────────
+
+    def _rebuild(self):
+        for w in self._container.winfo_children():
+            w.destroy()
+
+        # ---- Title ----
+        header = ctk.CTkFrame(self._container, fg_color="transparent")
+        header.pack(fill="x", padx=20, pady=(18, 4))
+
+        ctk.CTkLabel(header,
+                     text="Today's Sales",
+                     font=font_bold(17),
+                     text_color=FG_PRIMARY,
+                     anchor="w").pack(fill="x")
+
+        ctk.CTkLabel(header,
+                     text=datetime.now().strftime("%A, %B %d, %Y"),
+                     font=font(11),
+                     text_color=FG_SECONDARY,
+                     anchor="w").pack(fill="x", pady=(2, 0))
+
+        # ---- Big total ----
+        total = self._stats.get("total_sales_today", 0) or 0
+
+        total_box = ctk.CTkFrame(self._container, fg_color="#EAF0FF",
+                                 corner_radius=10)
+        total_box.pack(fill="x", padx=20, pady=(12, 10))
+
+        ctk.CTkLabel(total_box,
+                     text="TOTAL SALES",
+                     font=font_bold(10),
+                     text_color=FG_SECONDARY,
+                     anchor="w").pack(fill="x", padx=16, pady=(12, 0))
+
+        ctk.CTkLabel(total_box,
+                     text=f"₱{total:,.2f}",
+                     font=font_bold(26),
+                     text_color=ACCENT,
+                     anchor="w").pack(fill="x", padx=16, pady=(0, 12))
+
+        # ---- Transaction list ----
+        today_db = datetime.now().strftime("%Y-%m-%d")
+        try:
+            transactions = TransactionController.list(
+                date_from=today_db,
+                date_to=today_db,
+            )
+        except Exception as e:
+            print(f"[TodaySales] fetch failed: {e}")
+            transactions = []
+
+        list_card = ctk.CTkFrame(self._container, fg_color=BG_CARD,
+                                 corner_radius=12,
+                                 border_width=1,
+                                 border_color=BORDER)
+        list_card.pack(fill="both", expand=True, padx=20, pady=(0, 10))
+
+        # ---- Column header ----
+        header_row = ctk.CTkFrame(list_card, fg_color="transparent")
+        header_row.pack(fill="x", padx=14, pady=(12, 6))
+        cols = [
+            ("Txn #",        70),
+            ("Date & Time",  150),
+            ("Cashier",      140),
+            ("Payment",      90),
+            ("Total",       110),
+            ("",             80),
+        ]
+        for text, width in cols:
+            ctk.CTkLabel(header_row, text=text, width=width,
+                         anchor="w",
+                         font=font_bold(11),
+                         text_color=FG_SECONDARY).pack(side="left", padx=3)
+
+        ctk.CTkFrame(list_card, height=1, fg_color=BORDER).pack(
+            fill="x", padx=14)
+
+        # ---- Rows (scrollable) ----
+        if not transactions:
+            ctk.CTkLabel(list_card,
+                         text="No transactions today.",
+                         font=font(12),
+                         text_color=FG_MUTED).pack(pady=30)
+        else:
+            body = ctk.CTkScrollableFrame(list_card, fg_color="transparent")
+            body.pack(fill="both", expand=True, padx=8, pady=(4, 10))
+
+            for i, t in enumerate(transactions):
+                self._render_row(body, t, i)
+
+        # ---- Close button ----
+        ctk.CTkButton(self._container, text="Close",
+                      height=38, corner_radius=8,
+                      font=font_bold(12),
+                      fg_color=NEUTRAL, hover_color=NEUTRAL_HOVER,
+                      text_color=NEUTRAL_TEXT,
+                      command=self._on_close
+                      ).pack(side="bottom", fill="x", padx=20, pady=(0, 16))
+
+    def _render_row(self, parent, t, index):
+        bg = BG_ROW_ALT if index % 2 else "transparent"
+        row = ctk.CTkFrame(parent, fg_color=bg, corner_radius=6)
+        row.pack(fill="x", pady=2)
+
+        ctk.CTkLabel(row, text=f"#{t['transaction_id']}",
+                     width=70, anchor="w",
+                     font=font_bold(11),
+                     text_color=ACCENT).pack(side="left", padx=3, pady=8)
+
+        ctk.CTkLabel(row, text=t["created_at"] or "-",
+                     width=150, anchor="w",
+                     font=font(11),
+                     text_color=FG_SECONDARY).pack(side="left", padx=3)
+
+        cashier = t["full_name"] or t["username"] or "-"
+        ctk.CTkLabel(row, text=cashier,
+                     width=140, anchor="w",
+                     font=font(11),
+                     text_color=FG_PRIMARY).pack(side="left", padx=3)
+
+        pay = t["payment_method"] or "-"
+        pay_color = SUCCESS if pay == "Cash" else (
+            ACCENT if pay == "GCash" else FG_SECONDARY
+        )
+        ctk.CTkLabel(row, text=pay,
+                     width=90, anchor="w",
+                     font=font_bold(11),
+                     text_color=pay_color).pack(side="left", padx=3)
+
+        ctk.CTkLabel(row, text=f"₱{t['total']:.2f}",
+                     width=110, anchor="w",
+                     font=font_bold(12),
+                     text_color=ACCENT).pack(side="left", padx=3)
+
+        ctk.CTkButton(row, text="View", width=60, height=28,
+                      corner_radius=6,
+                      font=font_bold(11),
+                      fg_color=ACCENT, hover_color=ACCENT_HOVER,
+                      command=lambda txn=t: self._view_transaction(txn)
+                      ).pack(side="right", padx=4)
+
+    def _view_transaction(self, txn):
+        dlg = TransactionDetailDialog.get_shared(self.parent)
+        dlg.load_transaction(txn)
+        dlg.deiconify()
