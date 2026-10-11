@@ -376,10 +376,26 @@ class InventoryView(ctk.CTkFrame):
         self._load()
 
     def _toggle_archived(self):
+        """Toggle between active products and archived-only view."""
         self.show_archived = self.archive_var.get()
+
+        # ⚡ Archived view overrides the low/expiring filters, since
+        #    those filters only make sense for active products.
+        if self.show_archived and self.filter_mode != "all":
+            self.filter_mode = "all"
+            self._sync_filter_buttons()
+
+        # ⚡ Disable the low/expiring filter buttons while showing archived,
+        #    so the user can't accidentally combine them.
+        state = "disabled" if self.show_archived else "normal"
+        try:
+            self.btn_low.configure(state=state)
+            self.btn_expiring.configure(state=state)
+        except Exception:
+            pass
+
         self.current_page = 1
         self._load()
-
     # ─────────────────────────────────────────────
     # DATE
     # ─────────────────────────────────────────────
@@ -456,14 +472,22 @@ class InventoryView(ctk.CTkFrame):
     # ─────────────────────────────────────────────
 
     def _load(self):
-        if self.filter_mode == "low":
+        # ⚡ Archived view: show ONLY archived products (or nothing).
+        if self.show_archived:
+            products = InventoryController.list_by_category(
+                self.selected_category_id,
+                include_archived=True,
+            )
+            # Keep only the archived ones
+            products = [p for p in products if p["is_archived"]]
+        elif self.filter_mode == "low":
             products = InventoryController.list_low_stock()
         elif self.filter_mode == "expiring":
             products = self._products_expiring_soon()
         else:
             products = InventoryController.list_by_category(
                 self.selected_category_id,
-                include_archived=self.show_archived,
+                include_archived=False,
             )
 
         if self.search_query:
