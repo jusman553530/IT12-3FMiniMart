@@ -258,8 +258,8 @@ class ReceiveConfirmDialog(ctk.CTkToplevel):
             ("Ordered",         105),
             ("Received",         90),
             ("Cost / Unit",     100),
-            ("Expiration Date", 150),
-            ("Total Pieces",    105),
+            ("Expiration Date ", 150),
+            ("Total Pieces",    90),
         ]
         for text, width in header_cols:
             ctk.CTkLabel(header, text=text, width=width,
@@ -420,7 +420,9 @@ class ReceiveConfirmDialog(ctk.CTkToplevel):
         self._cost_entries[item["product_id"]] = cost_e
 
         # ---- Expiration Date (auto-format MM/DD/YYYY) ----
-        expiry_vcmd = (self.register(_validate_date_input), "%P")
+        # NOTE: no validate="key" here — CTk's placeholder logic conflicts
+        # with Tk's validation. The auto-slash formatter enforces the shape
+        # as the user types, and _confirm() validates the final date.
         expiry_e = ctk.CTkEntry(
             row,
             width=140, height=30,
@@ -431,7 +433,6 @@ class ReceiveConfirmDialog(ctk.CTkToplevel):
             border_width=1,
             justify="center",
             placeholder_text="MM/DD/YYYY",
-            validate="key", validatecommand=expiry_vcmd,
         )
         expiry_e.pack(side="left", padx=3)
 
@@ -446,7 +447,7 @@ class ReceiveConfirmDialog(ctk.CTkToplevel):
             except Exception:
                 expiry_e.insert(0, existing)
 
-        # ⚡ Auto-insert "/" separators as user types
+        # Auto-insert "/" separators as the user types
         expiry_e.bind(
             "<KeyRelease>",
             lambda e, entry=expiry_e: self._reformat_expiry(entry)
@@ -662,3 +663,4 @@ class ReceiveConfirmDialog(ctk.CTkToplevel):
         self.expiration_dates = {}
         self.total_amount = 0.0
         self.destroy()
+        

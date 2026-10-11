@@ -13,6 +13,7 @@ from config import (
     ACCENT, ACCENT_HOVER, DANGER, DANGER_HOVER,
 )
 from controllers.auth_controller import AuthController
+from backup_service import stop_scheduler
 
 from views.dashboard_view import DashboardView
 from views.pos_view import POSView
@@ -42,6 +43,15 @@ class MainWindow(ctk.CTk):
         self.nav_buttons = {}
 
         self._build()
+
+    # ⚡ Cancel the backup timer when the window closes so the process
+    #    can exit cleanly. Also flushes any pending timer.
+    def destroy(self):
+        try:
+            stop_scheduler()
+        except Exception:
+            pass
+        super().destroy()
 
     # ─────────────────────────────────────────────
     # BUILD
@@ -167,8 +177,6 @@ class MainWindow(ctk.CTk):
 
         command()
 
-    # ⚡ Accepts an optional initial_filter and forwards it to the
-    #    inventory handler when the target is "inventory".
     def _navigate_by_key(self, key, initial_filter=None):
         """Used by dashboard shortcuts to jump to another view."""
         ADMIN_ONLY = {"users", "logs"}
@@ -178,7 +186,6 @@ class MainWindow(ctk.CTk):
         if key in ("reports", "transactions"):
             key = "sales"
 
-        # Inventory accepts a filter; other handlers ignore it.
         if key == "inventory":
             self._navigate(
                 key,
@@ -221,8 +228,6 @@ class MainWindow(ctk.CTk):
         self._clear_content()
         POSView(self.content, self.user).pack(fill="both", expand=True)
 
-    # ⚡ Accepts an optional initial_filter so the dashboard's Low Stock /
-    #    Expiring Soon KPIs can open Inventory with a filter pre-applied.
     def _show_inventory(self, initial_filter=None):
         self._clear_content()
         InventoryView(self.content, self.user,

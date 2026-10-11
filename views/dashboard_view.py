@@ -66,6 +66,31 @@ class DashboardView(ctk.CTkFrame):
                      font=font(11),
                      text_color=FG_SECONDARY,
                      anchor="w").pack(fill="x", pady=(2, 0))
+        
+                # ⚡ Backup status line (admins only)
+        if AuthController.is_admin():
+            try:
+                from backup_service import get_status
+                status = get_status()
+
+                if status.get("error"):
+                    backup_text = f"⚠  Backup failed: {status['error']}"
+                    backup_color = DANGER
+                elif status.get("time"):
+                    when = status["time"].strftime("%Y-%m-%d %H:%M")
+                    backup_text = f"Database backup: {when}"
+                    backup_color = FG_MUTED
+                else:
+                    backup_text = "Database backup: pending first run"
+                    backup_color = FG_MUTED
+
+                ctk.CTkLabel(title_box,
+                             text=backup_text,
+                             font=font(10),
+                             text_color=backup_color,
+                             anchor="w").pack(fill="x", pady=(4, 0))
+            except Exception:
+                pass
 
         # ═════════════════════════════════════════
         # KPI ROW

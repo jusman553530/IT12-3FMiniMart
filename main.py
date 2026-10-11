@@ -13,6 +13,12 @@ def main():
 
     initialize_database()
 
+    # ⚡ Start the automatic daily database backup scheduler.
+    #    Runs an immediate check (creates backups/store_data_<date>_<time>.db
+    #    if today's doesn't exist yet), then re-checks every 30 minutes.
+    from backup_service import start_scheduler
+    start_scheduler()
+
     from views.login_view import LoginView
     LoginView().mainloop()
 
