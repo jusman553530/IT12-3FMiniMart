@@ -5,11 +5,11 @@
 from datetime import datetime, timedelta
 import customtkinter as ctk
 from tkinter import messagebox
-from views.transaction_dialogs import TransactionDetailDialog
 
 from controllers.transaction_controller import TransactionController
 from views.date_picker import DatePickerField
-from utils import prepare_dialog_screen, ui_date_to_db, is_valid_ui_date
+from views.transaction_dialogs import TransactionDetailDialog
+from utils import ui_date_to_db, is_valid_ui_date
 from config import (
     font, font_bold,
     BG_MAIN, BG_CARD, BG_INPUT, BG_ROW_ALT, BORDER,
@@ -565,121 +565,7 @@ class TransactionsTab(ctk.CTkFrame):
     # ─────────────────────────────────────────────
 
     def _view_transaction(self, txn):
+        # ⚡ Reuse the shared dialog — one instance for the whole app
         dlg = TransactionDetailDialog.get_shared(self.winfo_toplevel())
         dlg.load_transaction(txn)
         dlg.deiconify()
-
-# ─────────────────────────────────────────────
-# TRANSACTION DETAIL DIALOG
-# ─────────────────────────────────────────────
-
-class TransactionDetailDialog(ctk.CTkToplevel):
-
-    def __init__(self, parent, txn):
-        super().__init__(parent)
-        self.parent = parent
-        self.txn = txn
-        self.title(f"Transaction #{txn['transaction_id']}")
-        self.geometry("580x500")
-        self.resizable(False, False)
-        self.configure(fg_color=BG_MAIN)
-        self._build()
-        prepare_dialog_screen(self, self.parent)
-
-    def _build(self):
-        t = self.txn
-
-        ctk.CTkLabel(self, text=f"Transaction #{t['transaction_id']}",
-                     font=font_bold(18),
-                     text_color=FG_PRIMARY).pack(pady=(18, 4))
-
-        ctk.CTkLabel(self, text=t["created_at"],
-                     font=font(11),
-                     text_color=FG_SECONDARY).pack(pady=(0, 14))
-
-        info = ctk.CTkFrame(self, fg_color=BG_CARD,
-                            corner_radius=12,
-                            border_width=1,
-                            border_color=BORDER)
-        info.pack(fill="x", padx=20, pady=(0, 10))
-
-        rows = [
-            ("Cashier",     t["full_name"] or t["username"]),
-            ("Payment",     t["payment_method"]),
-        ]
-        if t["payment_method"] == "GCash":
-            ref = t["gcash_reference"]
-            if ref:
-                rows.append(("GCash Reference", ref))
-        rows += [
-            ("Amount Paid", f"₱{t['amount_paid']:.2f}"),
-            ("Change",      f"₱{t['change_due']:.2f}"),
-            ("Total",       f"₱{t['total']:.2f}"),
-        ]
-        for i, (label, value) in enumerate(rows):
-            if i > 0:
-                ctk.CTkFrame(info, height=1, fg_color=BORDER).pack(
-                    fill="x", padx=14)
-
-            row = ctk.CTkFrame(info, fg_color="transparent")
-            row.pack(fill="x", padx=14, pady=8)
-
-            ctk.CTkLabel(row, text=label,
-                         font=font_bold(11),
-                         text_color=FG_SECONDARY,
-                         anchor="w").pack(side="left")
-            ctk.CTkLabel(row, text=str(value), anchor="e",
-                         font=font_bold(12),
-                         text_color=FG_PRIMARY).pack(side="right")
-
-        ctk.CTkLabel(self, text="Items Purchased",
-                     font=font_bold(13),
-                     text_color=FG_PRIMARY).pack(pady=(10, 4))
-
-        items_card = ctk.CTkFrame(self, fg_color=BG_CARD,
-                                  corner_radius=12,
-                                  border_width=1,
-                                  border_color=BORDER)
-        items_card.pack(fill="both", expand=True, padx=20, pady=(0, 10))
-
-        lines = ctk.CTkScrollableFrame(items_card, fg_color="transparent")
-        lines.pack(fill="both", expand=True, padx=8, pady=8)
-
-        header = ctk.CTkFrame(lines, fg_color="transparent")
-        header.pack(fill="x", pady=(2, 6))
-        for text, width in [("Item", 220), ("Qty", 60),
-                            ("Price", 100), ("Subtotal", 110)]:
-            ctk.CTkLabel(header, text=text, width=width,
-                         anchor="w",
-                         font=font_bold(11),
-                         text_color=FG_SECONDARY).pack(side="left", padx=3)
-
-        items = TransactionController.items(t["transaction_id"])
-        for i, it in enumerate(items):
-            bg = BG_ROW_ALT if i % 2 else "transparent"
-            row = ctk.CTkFrame(lines, fg_color=bg, corner_radius=6)
-            row.pack(fill="x", pady=1)
-
-            ctk.CTkLabel(row, text=it["product_name"],
-                         width=220, anchor="w",
-                         font=font(11),
-                         text_color=FG_PRIMARY).pack(side="left", padx=3, pady=6)
-            ctk.CTkLabel(row, text=f"×{it['quantity']}",
-                         width=60, anchor="w",
-                         font=font(11),
-                         text_color=FG_SECONDARY).pack(side="left", padx=3)
-            ctk.CTkLabel(row, text=f"₱{it['price']:.2f}",
-                         width=100, anchor="w",
-                         font=font(11),
-                         text_color=FG_PRIMARY).pack(side="left", padx=3)
-            ctk.CTkLabel(row, text=f"₱{it['subtotal']:.2f}",
-                         width=110, anchor="w",
-                         font=font_bold(11),
-                         text_color=FG_PRIMARY).pack(side="left", padx=3)
-
-        ctk.CTkButton(self, text="Close", width=140, height=38,
-                      corner_radius=8,
-                      font=font_bold(12),
-                      fg_color=NEUTRAL, hover_color=NEUTRAL_HOVER,
-                      text_color=NEUTRAL_TEXT,
-                      command=self.destroy).pack(pady=(6, 16))

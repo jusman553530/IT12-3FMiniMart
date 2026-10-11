@@ -8,7 +8,7 @@ from tkinter import messagebox
 
 from controllers.inventory_controller import InventoryController
 from controllers.supplier_controller import SupplierController
-from utils import prepare_dialog_screen
+from utils import prepare_dialog_screen, ui_date_to_db, is_valid_ui_date
 from config import (
     font, font_bold,
     BG_MAIN, BG_CARD, BG_INPUT, BG_ROW_ALT, BORDER,
@@ -17,6 +17,32 @@ from config import (
     ACCENT, ACCENT_HOVER, SUCCESS, DANGER, DANGER_HOVER,
     NEUTRAL, NEUTRAL_HOVER, NEUTRAL_TEXT,
 )
+
+
+# ─────────────────────────────────────────────
+# ⚡ DATE INPUT VALIDATORS (MM/DD/YYYY auto-format)
+# ─────────────────────────────────────────────
+
+def _validate_date_input(proposed: str) -> bool:
+    """Allow digits and '/' only, max length 10 (MM/DD/YYYY)."""
+    if proposed == "":
+        return True
+    if len(proposed) > 10:
+        return False
+    return all(ch.isdigit() or ch == "/" for ch in proposed)
+
+
+def _autofill_date_slashes(raw: str) -> str:
+    """Insert '/' automatically after MM and DD. Strips existing slashes
+    first so backspacing still works."""
+    digits = "".join(ch for ch in raw if ch.isdigit())
+    digits = digits[:8]  # max MMDDYYYY
+
+    if len(digits) <= 2:
+        return digits
+    if len(digits) <= 4:
+        return f"{digits[:2]}/{digits[2:]}"
+    return f"{digits[:2]}/{digits[2:4]}/{digits[4:]}"
 
 
 # ─────────────────────────────────────────────
@@ -180,8 +206,14 @@ class ProductDialog(ctk.CTkToplevel):
             self.exp_e = ctk.CTkEntry(exp_col, height=30, corner_radius=6,
                                       font=font(12), fg_color=BG_INPUT,
                                       border_color=BORDER, border_width=1,
-                                      placeholder_text="YYYY-MM-DD")
+                                      placeholder_text="MM/DD/YYYY")
             self.exp_e.pack(fill="x")
+
+            # ⚡ Auto-insert "/" separators as user types
+            self.exp_e.bind(
+                "<KeyRelease>",
+                lambda e, entry=self.exp_e: self._reformat_expiry(entry)
+            )
         else:
             self.stock_e = None
             self.exp_e = None
@@ -239,6 +271,20 @@ class ProductDialog(ctk.CTkToplevel):
                       font=font_bold(12),
                       fg_color=ACCENT, hover_color=ACCENT_HOVER,
                       command=self._save).pack(fill="x", padx=12, pady=(14, 12))
+
+    # ─────────────────────────────────────────────
+    # ⚡ EXPIRY AUTO-FORMAT HELPER
+    # ─────────────────────────────────────────────
+
+    def _reformat_expiry(self, entry):
+        """Insert '/' separators as the user types. Keeps cursor at end."""
+        current = entry.get()
+        formatted = _autofill_date_slashes(current)
+        if formatted != current:
+            entry.delete(0, "end")
+            if formatted:
+                entry.insert(0, formatted)
+                entry.icursor("end")
 
     def _quick_add_category(self):
         prompt = ctk.CTkToplevel(self)
@@ -311,16 +357,17 @@ class ProductDialog(ctk.CTkToplevel):
                 messagebox.showerror("Error", "Stock cannot be negative.")
                 return
 
-            expiration_date = (self.exp_e.get().strip() or None)
-            if expiration_date:
-                try:
-                    datetime.strptime(expiration_date, "%Y-%m-%d")
-                except ValueError:
+            # ⚡ User enters MM/DD/YYYY; convert to DB's YYYY-MM-DD
+            raw_expiry = (self.exp_e.get().strip() or "")
+            if raw_expiry:
+                if not is_valid_ui_date(raw_expiry):
                     messagebox.showerror(
                         "Error",
-                        "Expiration date must be in YYYY-MM-DD format."
+                        "Please enter a valid expiration date as MM/DD/YYYY, "
+                        "or leave it blank."
                     )
                     return
+                expiration_date = ui_date_to_db(raw_expiry)
 
         category_id = None
         for c in self.categories:
@@ -345,14 +392,14 @@ class ProductDialog(ctk.CTkToplevel):
             ok, msg = InventoryController.update(
                 self.user, self.product["product_id"],
                 name, price, low, supplier_id, category_id,
-                None,          # image_path
+                None,
                 brand=brand, size=size, unit=unit, cost_price=0.0,
             )
         else:
             ok, msg = InventoryController.add(
                 self.user, name, price, initial_stock, low,
                 supplier_id, category_id,
-                None,          # image_path
+                None,
                 brand=brand, size=size, unit=unit, cost_price=0.0,
                 expiration_date=expiration_date,
             )
