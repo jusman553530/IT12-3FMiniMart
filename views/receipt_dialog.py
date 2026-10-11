@@ -17,6 +17,16 @@ from config import (
     NEUTRAL, NEUTRAL_HOVER, NEUTRAL_TEXT,
 )
 
+# ReportLab
+from reportlab.lib.pagesizes import letter
+from reportlab.lib.units import inch
+from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.platypus import (
+    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
+)
+from reportlab.lib.enums import TA_CENTER, TA_LEFT
+
 
 # ─────────────────────────────────────────────
 # RECEIPTS FOLDER
@@ -25,6 +35,26 @@ from config import (
 RECEIPTS_DIR = os.path.join(os.path.dirname(__file__), "..", "receipts")
 RECEIPTS_DIR = os.path.abspath(RECEIPTS_DIR)
 os.makedirs(RECEIPTS_DIR, exist_ok=True)
+
+
+# ─────────────────────────────────────────────
+# ⚡ AUTO-INCREMENT FILENAME HELPER
+# ─────────────────────────────────────────────
+
+def _next_free_path(path):
+    """If `path` already exists, return 'path_2.pdf', 'path_3.pdf', etc."""
+    if not os.path.exists(path):
+        return path
+
+    folder = os.path.dirname(path)
+    base, ext = os.path.splitext(os.path.basename(path))
+
+    n = 2
+    while True:
+        candidate = os.path.join(folder, f"{base}_{n}{ext}")
+        if not os.path.exists(candidate):
+            return candidate
+        n += 1
 
 
 # ─────────────────────────────────────────────
@@ -100,7 +130,7 @@ class ReceiptDialog(ctk.CTkToplevel):
                             corner_radius=8,
                             border_width=1,
                             border_color=BORDER)
-        card.pack(padx=16, pady=(0, 10))   # no expand — let it shrink to fit
+        card.pack(padx=16, pady=(0, 10))
 
         receipt_text = self._render_receipt_text()
 
@@ -132,7 +162,7 @@ class ReceiptDialog(ctk.CTkToplevel):
                       corner_radius=8,
                       font=font_bold(12),
                       fg_color=BRAND_GREEN, hover_color="#1E9040",
-                      command=self._open_in_editor
+                      command=self._print_receipt
                       ).pack(side="right", fill="x", expand=True, padx=(8, 0))
 
     # ─────────────────────────────────────────────
@@ -140,22 +170,14 @@ class ReceiptDialog(ctk.CTkToplevel):
     # ─────────────────────────────────────────────
 
     def _fit_to_content(self):
-        """
-        Measure the top-level's natural content size and set the window
-        to exactly that. Since we removed `expand=True` on the card and
-        button row, winfo_reqheight() now reflects the true content size.
-        """
         self.update_idletasks()
 
-        # Total content width/height required by the window
         req_w = self.winfo_reqwidth()
         req_h = self.winfo_reqheight()
 
-        # Small safety margin so scrollbars/borders don't clip
         window_w = req_w + 8
         window_h = req_h + 8
 
-        # Ensure a reasonable minimum
         window_w = max(window_w, 520)
         window_h = max(window_h, 380)
 
@@ -163,7 +185,7 @@ class ReceiptDialog(ctk.CTkToplevel):
         self.minsize(window_w, window_h)
 
     # ─────────────────────────────────────────────
-    # RECEIPT TEXT BUILDER
+    # RECEIPT TEXT BUILDER (on-screen preview)
     # ─────────────────────────────────────────────
 
     def _render_receipt_text(self):
@@ -179,12 +201,10 @@ class ReceiptDialog(ctk.CTkToplevel):
         def thin_divider():
             return "-" * w
 
-        # ---- Header ----
         lines.append(divider())
         lines.append(center("3F MiniMart"))
         lines.append(divider())
 
-        # ---- Meta ----
         lines.append(f"Receipt #: {self.txn_id}".ljust(w))
         if self.created_at:
             lines.append(f"Date     : {self.created_at}".ljust(w))
@@ -194,7 +214,6 @@ class ReceiptDialog(ctk.CTkToplevel):
         lines.append(f"Cashier  : {cashier}".ljust(w))
         lines.append(thin_divider())
 
-        # ---- Items table ----
         lines.append(
             "ITEM".ljust(20)
             + "QTY".rjust(5)
@@ -229,7 +248,6 @@ class ReceiptDialog(ctk.CTkToplevel):
 
         lines.append(thin_divider())
 
-        # ---- Totals ----
         lines.append("Subtotal:".ljust(28) + f"₱{self.total:.2f}".rjust(14))
         lines.append(f"Payment: {self.payment_method}".ljust(w))
 
@@ -247,29 +265,245 @@ class ReceiptDialog(ctk.CTkToplevel):
         return "\n".join(lines)
 
     # ─────────────────────────────────────────────
-    # OPEN IN EDITOR
+    # ⚡ PRINT — generate PDF, then open the Windows print dialog
     # ─────────────────────────────────────────────
 
-    def _open_in_editor(self):
-        text = self._render_receipt_text()
-        filename = f"receipt_{self.txn_id:06d}.txt"
-        path = os.path.join(RECEIPTS_DIR, filename)
+    # ─────────────────────────────────────────────
+    # ⚡ PRINT — generate PDF, then open the print dialog
+    # ─────────────────────────────────────────────
 
+    # ─────────────────────────────────────────────
+    # ⚡ PRINT — generate PDF, then open the print dialog
+    # ─────────────────────────────────────────────
+
+    def _print_receipt(self):
+        # ---- 1. Build the PDF path (auto-incremented) ----
+        base_name = f"receipt_{self.txn_id:06d}.pdf"
+        path = os.path.join(RECEIPTS_DIR, base_name)
+        path = _next_free_path(path)
+
+        # ---- 2. Generate the PDF ----
         try:
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(text)
+            self._build_receipt_pdf(path)
         except Exception as e:
-            messagebox.showerror("Error", f"Could not save receipt:\n{e}")
+            messagebox.showerror(
+                "Print Failed",
+                f"Could not generate receipt PDF:\n{e}",
+                parent=self,
+            )
             return
 
+        # ---- 3. Hand it to the OS with a print-aware launcher ----
+        if sys.platform.startswith("win"):
+            if self._launch_print_windows(path):
+                return
+
+            # Nothing worked — save-and-tell fallback
+            try:
+                subprocess.Popen(["explorer", "/select,", path])
+            except Exception:
+                pass
+
+            messagebox.showinfo(
+                "Receipt Saved",
+                "Could not open the print dialog automatically.\n\n"
+                f"The receipt PDF was saved to:\n{path}\n\n"
+                "Open it manually and press Ctrl+P to print.",
+                parent=self,
+            )
+            return
+
+        # macOS / Linux
         try:
-            if sys.platform.startswith("win"):
-                os.startfile(path)
-            elif sys.platform == "darwin":
+            if sys.platform == "darwin":
                 subprocess.Popen(["open", path])
             else:
                 subprocess.Popen(["xdg-open", path])
         except Exception as e:
-            messagebox.showerror("Error",
-                                 f"Could not open editor:\n{e}\n\n"
-                                 f"File saved at:\n{path}")
+            messagebox.showerror(
+                "Print Failed",
+                f"Could not open receipt:\n{e}\n\n"
+                f"PDF saved at:\n{path}",
+                parent=self,
+            )
+
+    # ─────────────────────────────────────────────
+    # ⚡ WINDOWS LAUNCHER — tries several print verbs
+    # ─────────────────────────────────────────────
+
+    def _launch_print_windows(self, path):
+        """
+        Try to open `path` in an app that will show the print dialog.
+
+        Order of attempts:
+          1. os.startfile(path, "print")  — works if the default .pdf handler
+             registers a 'print' verb (Adobe Reader does).
+          2. Edge with --print  — Edge ships with Windows and honors this flag,
+             which opens the PDF and triggers the print dialog immediately.
+          3. Chrome with --print — same idea, for machines where Chrome is
+             installed but Edge isn't the default.
+        Returns True on success, False if every attempt failed.
+        """
+
+        # ---- Attempt 1: default print verb ----
+        try:
+            os.startfile(path, "print")
+            return True
+        except OSError:
+            pass
+
+        # ---- Attempt 2: Microsoft Edge ----
+        edge_paths = [
+            # 64-bit Edge
+            r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+            # 32-bit Edge
+            r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+            # Per-user install
+            os.path.expandvars(
+                r"%LOCALAPPDATA%\Microsoft\Edge\Application\msedge.exe"
+            ),
+        ]
+        for edge in edge_paths:
+            if os.path.exists(edge):
+                try:
+                    subprocess.Popen([edge, "--print", path])
+                    return True
+                except Exception:
+                    pass
+
+        # ---- Attempt 3: Google Chrome ----
+        chrome_paths = [
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+            os.path.expandvars(
+                r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"
+            ),
+        ]
+        for chrome in chrome_paths:
+            if os.path.exists(chrome):
+                try:
+                    subprocess.Popen([chrome, "--print", path])
+                    return True
+                except Exception:
+                    pass
+
+        return False
+    # ─────────────────────────────────────────────
+    # ⚡ RECEIPT PDF BUILDER (ReportLab — Helvetica/PHP)
+    # ─────────────────────────────────────────────
+
+    # ─────────────────────────────────────────────
+    # ⚡ RECEIPT PDF BUILDER — monospace, matches the preview
+    # ─────────────────────────────────────────────
+
+    # ─────────────────────────────────────────────
+    # ⚡ RECEIPT PDF BUILDER — monospace, matches the preview
+    # ─────────────────────────────────────────────
+
+    # ─────────────────────────────────────────────
+    # ⚡ RECEIPT PDF BUILDER — fits within a printable page
+    # ─────────────────────────────────────────────
+
+    # ─────────────────────────────────────────────
+    # ⚡ RECEIPT PDF BUILDER — thermal-receipt sized
+    # ─────────────────────────────────────────────
+
+    # ─────────────────────────────────────────────
+    # ⚡ RECEIPT PDF BUILDER — thermal-receipt sized
+    # ─────────────────────────────────────────────
+
+    # ─────────────────────────────────────────────
+    # ⚡ RECEIPT PDF BUILDER — thermal-receipt sized
+    # ─────────────────────────────────────────────
+
+    def _build_receipt_pdf(self, path):
+        """
+        Render the receipt PDF at thermal-receipt proportions.
+
+        Uses a raw BaseDocTemplate + single Frame so the content
+        exactly fills the page:
+          - 80mm wide (standard thermal paper)
+          - 6.5pt Courier
+          - height measured from the actual flowable, plus a small
+            safety buffer, so nothing gets pushed to a phantom page 2.
+        """
+        from reportlab.lib.units import mm
+        from reportlab.platypus import (
+            BaseDocTemplate, Frame, PageTemplate, Preformatted,
+        )
+
+        receipt_text = self._render_receipt_text()
+        receipt_text = receipt_text.replace("₱", "PHP")   # Courier lacks ₱
+
+        style = _receipt_mono_style()
+
+        # ---- Page geometry ----
+        page_width = 80 * mm
+        left_pad = 3 * mm
+        right_pad = 3 * mm
+        top_pad = 2 * mm
+        bottom_pad = 2 * mm
+
+        avail_width = page_width - left_pad - right_pad
+
+        # ---- Measure the actual flowable height ----
+        flowable = Preformatted(receipt_text, style)
+        _, content_height = flowable.wrap(avail_width, 100000)
+
+        # ---- Page height = content + padding + a real safety buffer ----
+        # The buffer absorbs ReportLab's fractional rounding so the
+        # last line never spills onto a second page.
+        safety = 12   # points ≈ 4.2mm
+        page_height = top_pad + content_height + bottom_pad + safety
+
+        # ---- Build with BaseDocTemplate + single Frame ----
+        # Frame starts at (0,0) local coords (bottom-left) and its
+        # height exactly equals content_height + top_pad. No internal
+        # margins, so the flowable fits with room to spare.
+        doc = BaseDocTemplate(
+            path,
+            pagesize=(page_width, page_height),
+            leftMargin=0,
+            rightMargin=0,
+            topMargin=0,
+            bottomMargin=0,
+            title=f"Receipt #{self.txn_id}",
+            author="3F MiniMart POS",
+        )
+
+        frame = Frame(
+            x1=left_pad,
+            y1=bottom_pad,          # distance from page bottom
+            width=avail_width,
+            height=page_height - top_pad - bottom_pad,
+            leftPadding=0,
+            rightPadding=0,
+            topPadding=0,
+            bottomPadding=0,
+            showBoundary=0,
+        )
+
+        doc.addPageTemplates([PageTemplate(id="receipt", frames=[frame])])
+        doc.build([flowable])
+# ─────────────────────────────────────────────
+# ⚡ RECEIPT MONOSPACE STYLE (module level)
+# ─────────────────────────────────────────────
+
+def _receipt_mono_style():
+    """
+    Style for the monospace receipt body.
+
+    6.5pt Courier: 42 chars ≈ 42 × 3.9pt ≈ 164pt ≈ 58mm — comfortably
+    inside the ~74mm usable width on an 80mm page.
+    """
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib import colors
+
+    return ParagraphStyle(
+        "receipt_mono",
+        fontName="Courier",
+        fontSize=6.5,
+        leading=8,
+        textColor=colors.black,
+        alignment=0,
+    )

@@ -36,8 +36,18 @@ FG_PRIMARY  = colors.HexColor("#0F172A")
 FG_MUTED    = colors.HexColor("#64748B")
 BORDER_GREY = colors.HexColor("#E2E8F0")
 ROW_ALT     = colors.HexColor("#F8FAFC")
-PROFIT_POS  = colors.HexColor("#16A34A")
-PROFIT_NEG  = colors.HexColor("#DC2626")
+
+
+# ─────────────────────────────────────────────
+# ⚡ SHARED TABLE WIDTH
+# ─────────────────────────────────────────────
+#
+# Letter page = 8.5in. Minus 0.55in margins on each side = 7.40in of
+# usable width. Both the Top Selling Products table and the Transactions
+# table sum their column widths to exactly this so their left and right
+# edges align.
+
+TOTAL_WIDTH = 7.40 * inch
 
 
 # ─────────────────────────────────────────────
@@ -45,17 +55,12 @@ PROFIT_NEG  = colors.HexColor("#DC2626")
 # ─────────────────────────────────────────────
 
 def _next_free_path(path):
-    """
-    If `path` already exists, return 'path_2.pdf', 'path_3.pdf', etc.
-    Otherwise return `path` unchanged.
-    """
     if not os.path.exists(path):
         return path
 
     folder = os.path.dirname(path)
     base, ext = os.path.splitext(os.path.basename(path))
 
-    # Strip a trailing _N if the user typed one, so numbering is clean
     match = re.match(r"^(.*?)_(\d+)$", base)
     if match:
         base = match.group(1)
@@ -89,7 +94,6 @@ def export_sales_report(summary, top_products, transactions,
     if not path:
         return False, "Cancelled."
 
-    # ---- If that exact file exists, auto-pick the next free number ----
     path = _next_free_path(path)
 
     try:
@@ -183,7 +187,12 @@ def _build_pdf(path, summary, top_products, transactions,
     story.append(summary_table)
     story.append(Spacer(1, 22))
 
-    # ---- Top Selling Products ----
+    # ═════════════════════════════════════════
+    # TOP SELLING PRODUCTS
+    # ═════════════════════════════════════════
+    # Columns: # | Product | Units | Price | Revenue
+    # Code / Cost / Profit removed.
+
     story.append(Paragraph("Top Selling Products", styles["3f_section"]))
     story.append(Spacer(1, 8))
 
@@ -193,8 +202,7 @@ def _build_pdf(path, summary, top_products, transactions,
             styles["3f_empty"],
         ))
     else:
-        header = ["#", "Product", "Code", "Units",
-                  "Cost", "Price", "Profit", "Revenue"]
+        header = ["#", "Product", "Units", "Price", "Revenue"]
         rows = [header]
 
         for i, p in enumerate(top_products, start=1):
@@ -207,24 +215,20 @@ def _build_pdf(path, summary, top_products, transactions,
             )
             rows.append([
                 str(i),
-                _truncate(display, 40),
-                p.get("product_code") or "-",
+                _truncate(display, 60),
                 f"{p.get('units_sold', 0):,}",
-                f"PHP {p.get('avg_cost', 0):.2f}",
                 f"PHP {p.get('avg_price', 0):.2f}",
-                f"PHP {p.get('profit', 0):.2f}",
                 f"PHP {p.get('revenue', 0):,.2f}",
             ])
 
+        # ⚡ Column widths sum to TOTAL_WIDTH (7.40in)
+        # 0.35 + 3.75 + 0.70 + 1.10 + 1.50 = 7.40
         col_widths = [
-            0.30 * inch,  # #
-            2.20 * inch,  # Product
-            0.80 * inch,  # Code
-            0.55 * inch,  # Units
-            0.75 * inch,  # Cost
-            0.75 * inch,  # Price
-            0.80 * inch,  # Profit
-            0.90 * inch,  # Revenue
+            0.35 * inch,   # #
+            3.75 * inch,   # Product
+            0.70 * inch,   # Units
+            1.10 * inch,   # Price
+            1.50 * inch,   # Revenue
         ]
 
         table = Table(rows, colWidths=col_widths, repeatRows=1)
@@ -233,12 +237,12 @@ def _build_pdf(path, summary, top_products, transactions,
             ("TEXTCOLOR",    (0, 0), (-1, 0), colors.white),
             ("FONT",         (0, 0), (-1, 0), FONT_BOLD, 9),
             ("ALIGN",        (0, 0), (0, -1), "LEFT"),
-            ("ALIGN",        (3, 0), (-1, -1), "RIGHT"),
+            ("ALIGN",        (2, 0), (-1, -1), "RIGHT"),
             ("FONT",         (0, 1), (-1, -1), FONT_REGULAR, 9),
             ("FONT",         (1, 1), (1, -1), FONT_BOLD, 9),
-            ("FONT",         (7, 1), (7, -1), FONT_BOLD, 9),
+            ("FONT",         (4, 1), (4, -1), FONT_BOLD, 9),
             ("TEXTCOLOR",    (0, 1), (-1, -1), FG_PRIMARY),
-            ("TEXTCOLOR",    (7, 1), (7, -1), BRAND_BLUE),
+            ("TEXTCOLOR",    (4, 1), (4, -1), BRAND_BLUE),
             ("LINEBELOW",    (0, 0), (-1, 0), 0.5, BRAND_BLUE),
             ("LINEBELOW",    (0, 1), (-1, -1), 0.25, BORDER_GREY),
             ("VALIGN",       (0, 0), (-1, -1), "MIDDLE"),
@@ -251,17 +255,22 @@ def _build_pdf(path, summary, top_products, transactions,
             if i % 2 == 0:
                 style_cmds.append(("BACKGROUND", (0, i), (-1, i), ROW_ALT))
 
-        for i, p in enumerate(top_products, start=1):
-            profit = p.get("profit", 0)
-            color = PROFIT_POS if profit > 0 else (
-                PROFIT_NEG if profit < 0 else FG_MUTED
-            )
-            style_cmds.append(("TEXTCOLOR", (6, i), (6, i), color))
-
         table.setStyle(TableStyle(style_cmds))
         story.append(table)
 
-    # ---- Transactions ----
+    # ═════════════════════════════════════════
+    # TRANSACTIONS — one row per purchased item
+    # ═════════════════════════════════════════
+    #
+    # Layout per transaction:
+    #   Row 1: Txn # | Date | Cashier | Payment | Item 1              | (blank)
+    #   Row 2: (blank) | (blank) | (blank) | (blank) | Item 2        | (blank)
+    #   ...
+    #   Row N: (blank) | (blank) | (blank) | (blank) | Item N        | PHP xxx
+    #
+    # Total appears ONLY on the last row of each group.
+    # A thin top border separates each transaction group.
+
     story.append(Spacer(1, 26))
     story.append(Paragraph(
         f"Transactions ({len(transactions)})",
@@ -281,43 +290,75 @@ def _build_pdf(path, summary, top_products, transactions,
                   "Payment", "Items Purchased", "Total"]
         rows = [header]
 
+        # Track which rows are "first row" or "last row" of a group so we
+        # can style them (draw the top separator on the first row, etc.)
+        group_first_rows = []   # row indices (in `rows`) that start a group
+        group_last_rows  = []   # row indices that end a group
+
         for t in transactions:
             t = dict(t)
             tid = t.get("transaction_id")
             cashier = t.get("full_name") or t.get("username") or "-"
+            date_str = (t.get("created_at") or "")[:16]
+            payment = t.get("payment_method") or "-"
 
             try:
                 line_items = TransactionController.items(tid)
             except Exception:
                 line_items = []
 
-            if line_items:
-                parts = [
-                    f"{it['product_name']} ×{it['quantity']}"
-                    for it in line_items
-                ]
-                items_text = ", ".join(parts)
-            else:
-                items_text = "—"
+            # If a transaction somehow has no items, still show the txn
+            # with an em-dash for the item so it doesn't disappear.
+            if not line_items:
+                line_items = [{"product_name": "—", "quantity": ""}]
 
-            items_text = _truncate(items_text, 90)
+            total_str = f"PHP {(t.get('total') or 0):,.2f}"
 
-            rows.append([
-                f"#{tid}",
-                (t.get("created_at") or "")[:16],
-                _truncate(cashier, 20),
-                t.get("payment_method") or "-",
-                items_text,
-                f"PHP {(t.get('total') or 0):,.2f}",
-            ])
+            first_row_idx = len(rows)
+            group_first_rows.append(first_row_idx)
 
+            for i, it in enumerate(line_items):
+                # Item column: "Name ×Qty" (quantity blank if missing)
+                name = it.get("product_name") or "—"
+                qty = it.get("quantity")
+                if qty:
+                    item_text = f"{name}  ×{qty}"
+                else:
+                    item_text = name
+                item_text = _truncate(item_text, 70)
+
+                if i == 0:
+                    # First row: show txn metadata
+                    rows.append([
+                        f"#{tid}",
+                        date_str,
+                        _truncate(cashier, 20),
+                        payment,
+                        item_text,
+                        "",   # Total blank — shown on last row
+                    ])
+                else:
+                    # Continuation rows: metadata columns are blank
+                    rows.append([
+                        "", "", "", "",
+                        item_text,
+                        "",
+                    ])
+
+            # Last row of this group gets the Total
+            last_row_idx = len(rows) - 1
+            rows[last_row_idx][5] = total_str
+            group_last_rows.append(last_row_idx)
+
+        # ⚡ Column widths sum to TOTAL_WIDTH (7.40in)
+        # 0.60 + 1.15 + 1.15 + 0.70 + 2.40 + 1.40 = 7.40
         col_widths = [
-            0.50 * inch,   # Txn #
-            1.05 * inch,   # Date & Time
+            0.60 * inch,   # Txn #
+            1.15 * inch,   # Date & Time
             1.15 * inch,   # Cashier
-            0.65 * inch,   # Payment
-            3.00 * inch,   # Items Purchased
-            0.95 * inch,   # Total
+            0.70 * inch,   # Payment
+            2.40 * inch,   # Items Purchased
+            1.40 * inch,   # Total
         ]
 
         txn_table = Table(rows, colWidths=col_widths, repeatRows=1)
@@ -329,20 +370,25 @@ def _build_pdf(path, summary, top_products, transactions,
             ("ALIGN",        (4, 0), (4, -1), "LEFT"),
             ("ALIGN",        (5, 0), (5, -1), "RIGHT"),
             ("FONT",         (0, 1), (-1, -1), FONT_REGULAR, 9),
-            ("FONT",         (5, 1), (5, -1), FONT_BOLD, 9),
+            ("FONT",         (0, 1), (0, -1), FONT_BOLD, 9),   # Txn # bold
+            ("FONT",         (5, 1), (5, -1), FONT_BOLD, 9),   # Total bold
             ("TEXTCOLOR",    (0, 1), (-1, -1), FG_PRIMARY),
             ("TEXTCOLOR",    (5, 1), (5, -1), BRAND_BLUE),
             ("LINEBELOW",    (0, 0), (-1, 0), 0.5, BRAND_BLUE),
-            ("LINEBELOW",    (0, 1), (-1, -1), 0.25, BORDER_GREY),
+            ("LINEBELOW",    (0, 1), (-1, -1), 0.15, BORDER_GREY),
             ("VALIGN",       (0, 0), (-1, -1), "TOP"),
             ("LEFTPADDING",  (0, 0), (-1, -1), 6),
             ("RIGHTPADDING", (0, 0), (-1, -1), 6),
             ("TOPPADDING",   (0, 0), (-1, -1), 5),
             ("BOTTOMPADDING",(0, 0), (-1, -1), 5),
         ]
-        for i in range(1, len(rows)):
-            if i % 2 == 0:
-                txn_style.append(("BACKGROUND", (0, i), (-1, i), ROW_ALT))
+
+        # ⚡ Draw a stronger line above the first row of each group so the
+        # boundary between transactions is visually obvious.
+        for r in group_first_rows:
+            if r == 0:
+                continue   # already has the header line
+            txn_style.append(("LINEABOVE", (0, r), (-1, r), 0.5, BRAND_BLUE))
 
         txn_table.setStyle(TableStyle(txn_style))
         story.append(txn_table)
